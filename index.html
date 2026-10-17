@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6f2">
+  <title>Buku Lagu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="script.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="library" aria-labelledby="library-title">
+      <div class="library-heading">
+        <div class="library-title-group"><div><p class="eyebrow">KOLEKSI LAGU</p><h2 id="library-title">Semua lagu <span id="song-count" class="count-pill">—</span></h2></div><p id="sync-status" class="sync-status" role="status" aria-live="polite">Memuat data…</p></div>
+        <div class="library-actions">
+          <button id="collapse-collection" class="collapse-button" type="button" aria-expanded="true" aria-controls="collection-results" title="Ciutkan koleksi">⌃</button>
+                  <button id="refresh-button" class="refresh-button" type="button" aria-label="Perbarui data dari spreadsheet" title="Perbarui data dari spreadsheet"><span aria-hidden="true">↻</span><span>Perbarui data</span></button>
+        </div>
+      </div>
+      <label class="search-box" for="search-input"><span aria-hidden="true">⌕</span><input id="search-input" type="search" placeholder="Cari judul, nomor, atau lirik…" autocomplete="off"><kbd>/</kbd></label>
+      <div id="collection-results">
+      <nav id="category-filters" class="category-filters" aria-label="Filter kategori lagu"></nav>
+      <div id="schedule-add-bar" class="schedule-add-bar" hidden>
+        <label for="target-schedule-select">Tambahkan lagu ke jadwal</label>
+        <select id="target-schedule-select" aria-label="Pilih jadwal tujuan"></select>
+        <span>Tekan + pada lagu yang ingin ditambahkan.</span>
+      </div>
+      <p id="list-status" class="list-status" role="status" aria-live="polite">Menghubungkan ke perpustakaan…</p>
+      <div id="song-list" class="song-list" aria-label="Daftar lagu"></div>
+      </div>
+    </section>
+
+    <section class="schedule-panel" aria-labelledby="schedule-title">
+      <div class="schedule-heading">
+        <div><p class="eyebrow">RENCANA IBADAH</p><h2 id="schedule-title">Jadwal ibadah</h2><p class="schedule-caption">Jadwal tersimpan di browser/perangkat ini.</p></div>
+        <button id="create-schedule" class="create-schedule-button" type="button"><span aria-hidden="true">＋</span> Buat jadwal</button>
+      </div>
+      <p id="schedule-status" class="schedule-status" role="status" aria-live="polite"></p>
+      <div id="schedule-list" class="schedule-list"></div>
+    </section>
+    <dialog id="schedule-view-dialog" class="schedule-view-dialog" aria-labelledby="schedule-view-title">
+      <section class="schedule-view-frame">
+        <header class="schedule-view-header">
+          <div><p class="eyebrow">DAFTAR LAGU IBADAH</p><h2 id="schedule-view-title"></h2><p id="schedule-view-date" class="schedule-view-date"></p></div>
+          <button id="close-schedule-view" class="close-button" type="button" aria-label="Tutup jadwal">×</button>
+        </header>
+        <div id="schedule-view-list" class="schedule-view-list"></div>
+        <div class="schedule-view-footer"><button id="delete-viewed-schedule" class="schedule-delete" type="button">Hapus jadwal</button></div>
+      </section>
+    </dialog>
+    <footer class="footer-note">Dibuat untuk membantu musik mengalir tanpa jeda.</footer>
+  </main>
+
+  <dialog id="song-dialog" class="song-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-frame">
+      <header class="dialog-header">
+        <div class="dialog-heading"><p id="dialog-category" class="dialog-category"></p><h2 id="dialog-title"></h2><p id="dialog-meta" class="dialog-meta"></p></div>
+        <div class="dialog-header-actions">
+          <div id="score-instruments" class="score-instruments" aria-label="Pilih instrumen partitur" hidden></div>
+          <button id="close-dialog" class="close-button" type="button" aria-label="Tutup preview">×</button>
+        </div>
+      </header>
+      <div class="reader-toolbar">
+        <span id="reader-position">LAGU</span>
+        <div class="chord-controls" aria-label="Pengaturan chord">
+          <label class="visually-hidden" for="chord-mode">Tampilan chord</label>
+          <select id="chord-mode" aria-label="Tampilan chord"><option value="numbers" selected>Chord angka</option><option value="letters">Chord huruf</option></select>
+          <div id="transpose-controls" class="transpose-controls">
+            <button id="transpose-down" type="button" aria-label="Turunkan nada dasar setengah nada">−</button>
+            <label class="visually-hidden" for="transpose-key">Nada dasar</label>
+            <select id="transpose-key" aria-label="Pilih nada dasar"></select>
+            <button id="transpose-up" type="button" aria-label="Naikkan nada dasar setengah nada">+</button>
+          </div>
+        </div>
+        <div class="reader-navigation"><button id="previous-song" type="button" aria-label="Lagu sebelumnya">&#8249;</button><button id="next-song" type="button" aria-label="Lagu berikutnya">&#8250;</button></div>
+      </div>
+      <section id="score-section" class="score-section" aria-label="Gambar partitur" hidden>
+        <div id="score-carousel-controls" class="score-carousel-controls" hidden>
+          <button id="score-previous" type="button" aria-label="Gambar partitur sebelumnya">‹</button>
+          <span id="score-page-position" aria-live="polite">1 / 1</span>
+          <button id="score-next" type="button" aria-label="Gambar partitur berikutnya">›</button>
+        </div>
+        <div id="score-pages" class="score-pages" hidden></div>
+      </section>
+      <article id="song-preview" class="song-preview" tabindex="0" aria-label="Isi lagu"></article>
+    </div>
+  </dialog>
+  <dialog id="score-image-dialog" class="score-image-dialog" aria-label="Tampilan penuh partitur">
+    <button id="close-score-image" class="score-image-close" type="button" aria-label="Tutup gambar dan kembali ke lirik">× <span>Kembali ke lirik</span></button>
+    <button id="score-image-previous" class="score-image-nav score-image-previous" type="button" aria-label="Partitur sebelumnya">‹</button>
+    <img id="score-image-full" alt="Partitur diperbesar">
+    <button id="score-image-next" class="score-image-nav score-image-next" type="button" aria-label="Partitur berikutnya">›</button>
+    <span id="score-image-position" class="score-image-position" aria-live="polite"></span>
+  </dialog>
+  <dialog id="schedule-edit-dialog" class="schedule-edit-dialog" aria-labelledby="schedule-edit-title">
+    <form id="schedule-edit-form" class="schedule-edit-form" method="dialog">
+      <div class="edit-dialog-heading"><div><p class="eyebrow">SALINAN LOKAL JADWAL</p><h2 id="schedule-edit-title">Edit lagu jadwal</h2></div></div>
+      <div class="schedule-edit-fields">
+        <label class="schedule-field">JUDUL<input name="title" type="text" maxlength="120" required></label>
+        <label class="schedule-field">NOMOR<input name="number" type="text" maxlength="30"></label>
+        <label class="schedule-field">NADA DASAR<input name="key" type="text" maxlength="20"></label>
+        <label class="schedule-field">JENIS MUSIK<input name="genre" type="text" maxlength="60"></label>
+        <label class="schedule-field">TEMPO<input name="tempo" type="text" maxlength="20"></label>
+        <label class="schedule-field edit-content-field">LIRIK &amp; CHORD
+          <span class="edit-help">Ketik lirik dan chord dalam satu input. Penanda bagian seperti [Intro], [Bait 1], [Reff], [Verse 2], atau [Bridge] akan disorot otomatis.</span>
+          <span class="schedule-song-editor-wrap">
+            <pre id="schedule-content-highlight" class="schedule-content-highlight" aria-hidden="true"></pre>
+            <textarea name="content" id="schedule-content-input" rows="12" spellcheck="false" wrap="off" aria-label="Lirik dan chord lagu"></textarea>
+          </span>
+        </label>
+      </div>
+      <p class="edit-local-note">Perubahan ini hanya berlaku pada lagu di jadwal ini, tidak mengubah spreadsheet.</p>
+      <div class="edit-dialog-actions"><button id="cancel-schedule-edit" class="edit-cancel" type="button">Batal</button><button class="edit-save" type="submit">Simpan di jadwal</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
