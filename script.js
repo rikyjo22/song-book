@@ -187,7 +187,7 @@
     let settled = false;
     instrumentFilterStatus.textContent = 'Memuat daftar instrumen…';
     instrumentFilterSelect.disabled = true;
-    const timeout = window.setTimeout(() => finish(new Error('Waktu koneksi habis.')), 15000);
+    const timeout = window.setTimeout(() => finish(new Error('Waktu koneksi habis.')), 8000);
     function finish(error, result) {
       if (settled) return;
       settled = true;
@@ -196,8 +196,13 @@
       script.remove();
       instrumentFilterSelect.disabled = false;
       if (error || !result || !result.ok) {
-        instrumentFilterStatus.textContent = (result && result.error) || (error && error.message) || 'Daftar instrumen gagal dimuat.';
-        instrumentFilterSelect.replaceChildren(new Option('Gagal memuat instrumen', ''));
+        instrumentFilterSelect.replaceChildren(new Option('Otomatis (Partitur)', ''));
+        const localNames = new Set(['Flute', 'Clarinet', 'Violin', 'Saxophone', 'Alto Sax', 'Trumpet']);
+        songs.forEach((song) => Object.keys(song.images || {}).forEach((name) => localNames.add(name)));
+        if (preferredInstrument) localNames.add(preferredInstrument);
+        [...localNames].forEach((name) => instrumentFilterSelect.add(new Option(name, name)));
+        instrumentFilterSelect.value = preferredInstrument;
+        instrumentFilterStatus.textContent = 'Daftar online belum tersedia; pilihan lokal ditampilkan sementara.';
         return;
       }
       instrumentFilterSelect.replaceChildren(new Option('Otomatis (Partitur)', ''));
@@ -220,6 +225,22 @@
     url.searchParams.set('callback', `SongBookCallbacks.${callbackName}`);
     script.src = url.toString();
     document.head.append(script);
+  }
+
+  function openInstrumentFilterDialog() {
+    if (typeof instrumentFilterDialog.showModal === 'function') instrumentFilterDialog.showModal();
+    else {
+      instrumentFilterDialog.classList.add('dialog-fallback-open');
+      instrumentFilterDialog.setAttribute('open', '');
+    }
+  }
+
+  function closeInstrumentFilterDialog() {
+    if (typeof instrumentFilterDialog.close === 'function' && instrumentFilterDialog.open) instrumentFilterDialog.close();
+    else {
+      instrumentFilterDialog.removeAttribute('open');
+      instrumentFilterDialog.classList.remove('dialog-fallback-open');
+    }
   }
 
   function loadCachedSongs() {
@@ -1894,21 +1915,21 @@
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
   refreshButton.addEventListener('click', loadSongs);
   document.getElementById('instrument-filter-open').addEventListener('click', () => {
-    instrumentFilterDialog.showModal();
+    openInstrumentFilterDialog();
     loadInstrumentOptions();
   });
-  document.getElementById('close-instrument-filter').addEventListener('click', () => instrumentFilterDialog.close());
+  document.getElementById('close-instrument-filter').addEventListener('click', closeInstrumentFilterDialog);
   instrumentFilterDialog.addEventListener('click', (event) => {
-    if (event.target === instrumentFilterDialog) instrumentFilterDialog.close();
+    if (event.target === instrumentFilterDialog) closeInstrumentFilterDialog();
   });
   document.getElementById('apply-instrument-filter').addEventListener('click', () => {
     saveInstrumentProfile(instrumentFilterSelect.value);
-    instrumentFilterDialog.close();
+    closeInstrumentFilterDialog();
   });
   document.getElementById('clear-instrument-filter').addEventListener('click', () => {
     saveInstrumentProfile('');
     instrumentFilterSelect.value = '';
-    instrumentFilterDialog.close();
+    closeInstrumentFilterDialog();
   });
   document.getElementById('create-schedule').addEventListener('click', addSchedule);
   document.getElementById('share-schedule-open').addEventListener('click', () => { fillShareSchedules(); document.getElementById('share-result').hidden = true; document.getElementById('share-status').textContent = ''; shareDialog.showModal(); });
