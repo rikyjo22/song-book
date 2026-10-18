@@ -107,6 +107,27 @@
   let shareTimer = 0;
   let shareExpiresAt = 0;
 
+  const instrumentProfileButton = document.getElementById('instrument-filter-open');
+  instrumentProfileButton.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
+  instrumentProfileButton.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
+  instrumentProfileButton.addEventListener('click', () => {
+    openInstrumentFilterDialog();
+    loadInstrumentOptions();
+  });
+  document.getElementById('close-instrument-filter').addEventListener('click', closeInstrumentFilterDialog);
+  instrumentFilterDialog.addEventListener('click', (event) => {
+    if (event.target === instrumentFilterDialog) closeInstrumentFilterDialog();
+  });
+  document.getElementById('apply-instrument-filter').addEventListener('click', () => {
+    saveInstrumentProfile(instrumentFilterSelect.value);
+    closeInstrumentFilterDialog();
+  });
+  document.getElementById('clear-instrument-filter').addEventListener('click', () => {
+    saveInstrumentProfile('');
+    instrumentFilterSelect.value = '';
+    closeInstrumentFilterDialog();
+  });
+
   function setStatus(message) { status.textContent = message; }
   function setSyncStatus(message) { syncStatus.textContent = message; }
   function formatTempo(value) {
@@ -228,19 +249,29 @@
   }
 
   function openInstrumentFilterDialog() {
-    if (typeof instrumentFilterDialog.showModal === 'function') instrumentFilterDialog.showModal();
-    else {
-      instrumentFilterDialog.classList.add('dialog-fallback-open');
-      instrumentFilterDialog.setAttribute('open', '');
+    if (instrumentFilterDialog.open) return;
+    try {
+      if (typeof instrumentFilterDialog.showModal === 'function') {
+        instrumentFilterDialog.showModal();
+        return;
+      }
+    } catch (error) {
+      console.warn('Dialog profil instrumen memakai mode kompatibilitas:', error);
     }
+    instrumentFilterDialog.classList.add('dialog-fallback-open');
+    instrumentFilterDialog.setAttribute('open', '');
   }
 
   function closeInstrumentFilterDialog() {
-    if (typeof instrumentFilterDialog.close === 'function' && instrumentFilterDialog.open) instrumentFilterDialog.close();
-    else {
-      instrumentFilterDialog.removeAttribute('open');
-      instrumentFilterDialog.classList.remove('dialog-fallback-open');
+    try {
+      if (typeof instrumentFilterDialog.close === 'function' && instrumentFilterDialog.open) {
+        instrumentFilterDialog.close();
+      }
+    } catch (error) {
+      console.warn('Dialog profil instrumen ditutup dengan mode kompatibilitas:', error);
     }
+    instrumentFilterDialog.removeAttribute('open');
+    instrumentFilterDialog.classList.remove('dialog-fallback-open');
   }
 
   function loadCachedSongs() {
@@ -1914,23 +1945,6 @@
   document.getElementById('score-previous').addEventListener('click', () => moveScorePage(-1));
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
   refreshButton.addEventListener('click', loadSongs);
-  document.getElementById('instrument-filter-open').addEventListener('click', () => {
-    openInstrumentFilterDialog();
-    loadInstrumentOptions();
-  });
-  document.getElementById('close-instrument-filter').addEventListener('click', closeInstrumentFilterDialog);
-  instrumentFilterDialog.addEventListener('click', (event) => {
-    if (event.target === instrumentFilterDialog) closeInstrumentFilterDialog();
-  });
-  document.getElementById('apply-instrument-filter').addEventListener('click', () => {
-    saveInstrumentProfile(instrumentFilterSelect.value);
-    closeInstrumentFilterDialog();
-  });
-  document.getElementById('clear-instrument-filter').addEventListener('click', () => {
-    saveInstrumentProfile('');
-    instrumentFilterSelect.value = '';
-    closeInstrumentFilterDialog();
-  });
   document.getElementById('create-schedule').addEventListener('click', addSchedule);
   document.getElementById('share-schedule-open').addEventListener('click', () => { fillShareSchedules(); document.getElementById('share-result').hidden = true; document.getElementById('share-status').textContent = ''; shareDialog.showModal(); });
   document.getElementById('pull-schedule-open').addEventListener('click', () => { document.getElementById('pull-status').textContent = ''; pullDialog.showModal(); });
@@ -2086,9 +2100,6 @@
   targetScheduleSelect.addEventListener('change', () => { activeScheduleId = targetScheduleSelect.value; });
   search.addEventListener('input', handleSearchInput);
   collapseCollectionButton.addEventListener('click', () => setCollectionCollapsed(!isCollectionCollapsed));
-  const instrumentProfileButton = document.getElementById('instrument-filter-open');
-  instrumentProfileButton.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
-  instrumentProfileButton.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
   scheduleList.addEventListener('pointerdown', handleScheduleDragStart);
   scheduleList.addEventListener('pointermove', handleScheduleDragMove);
   scheduleList.addEventListener('pointerup', finishScheduleDrag);
