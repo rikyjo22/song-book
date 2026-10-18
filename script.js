@@ -76,6 +76,7 @@
   let sourcePreviewKey = 'C';
   let selectedPreviewKey = 'C';
   let callbackCounter = 0;
+  let instrumentOptionsLoaded = false;
   let cacheAvailable = false;
   let isLoadingSongs = false;
   let schedules = [];
@@ -114,10 +115,13 @@
     const trigger = event.target.closest('#instrument-filter-open');
     if (!trigger) return;
     event.preventDefault();
+    prepareInstrumentProfileOptions();
     openInstrumentFilterDialog();
-    loadInstrumentOptions();
   }, true);
   document.getElementById('close-instrument-filter').addEventListener('click', closeInstrumentFilterDialog);
+  document.getElementById('refresh-instrument-filter').addEventListener('click', (event) => {
+    loadInstrumentOptions(event.currentTarget);
+  });
   instrumentFilterDialog.addEventListener('click', (event) => {
     if (event.target === instrumentFilterDialog) closeInstrumentFilterDialog();
   });
@@ -199,12 +203,17 @@
     document.head.append(script);
   }
 
-  function loadInstrumentOptions() {
+  function loadInstrumentOptions(refreshButton = null) {
+    const selectedBeforeRefresh = instrumentFilterSelect.value;
     const callbackName = `cb_${Date.now()}_${++callbackCounter}`;
     const script = document.createElement('script');
     let settled = false;
     instrumentFilterStatus.textContent = 'Memuat daftar instrumen…';
     instrumentFilterSelect.disabled = true;
+    if (refreshButton) {
+      refreshButton.disabled = true;
+      refreshButton.classList.add('is-loading');
+    }
     const timeout = window.setTimeout(() => finish(new Error('Waktu koneksi habis.')), 8000);
     function finish(error, result) {
       if (settled) return;
@@ -213,27 +222,40 @@
       delete window.SongBookCallbacks[callbackName];
       script.remove();
       instrumentFilterSelect.disabled = false;
+      if (refreshButton) {
+        refreshButton.disabled = false;
+        refreshButton.classList.remove('is-loading');
+      }
       if (error || !result || !result.ok) {
-        instrumentFilterSelect.replaceChildren(new Option('Otomatis (Partitur)', ''));
+        if (refreshButton) {
+          instrumentFilterStatus.textContent = 'Daftar instrumen gagal diperbarui. Periksa koneksi lalu coba lagi.';
+          return;
+        }
+        instrumentFilterSelect.replaceChildren(new Option('Partitur', ''));
         const localNames = new Set(['Flute', 'Clarinet', 'Violin', 'Saxophone', 'Alto Sax', 'Trumpet']);
         songs.forEach((song) => Object.keys(song.images || {}).forEach((name) => localNames.add(name)));
         if (preferredInstrument) localNames.add(preferredInstrument);
         [...localNames].forEach((name) => instrumentFilterSelect.add(new Option(name, name)));
         instrumentFilterSelect.value = preferredInstrument;
-        instrumentFilterStatus.textContent = 'Daftar online belum tersedia; pilihan lokal ditampilkan sementara.';
+        instrumentFilterStatus.textContent = refreshButton
+          ? 'Daftar instrumen gagal diperbarui. Periksa koneksi lalu coba lagi.'
+          : 'Daftar online belum tersedia; pilihan lokal ditampilkan sementara.';
         return;
       }
-      instrumentFilterSelect.replaceChildren(new Option('Otomatis (Partitur)', ''));
+      instrumentFilterSelect.replaceChildren(new Option('Partitur', ''));
       (Array.isArray(result.instruments) ? result.instruments : []).forEach((name) => {
         instrumentFilterSelect.add(new Option(name, name));
       });
-      if (preferredInstrument && ![...instrumentFilterSelect.options].some((option) => normalize(option.value) === normalize(preferredInstrument))) {
-        instrumentFilterSelect.add(new Option(preferredInstrument, preferredInstrument));
+      const selectionToKeep = selectedBeforeRefresh || preferredInstrument;
+      if (selectionToKeep && ![...instrumentFilterSelect.options].some((option) => normalize(option.value) === normalize(selectionToKeep))) {
+        instrumentFilterSelect.add(new Option(selectionToKeep, selectionToKeep));
       }
-      instrumentFilterSelect.value = preferredInstrument;
+      instrumentFilterSelect.value = selectionToKeep;
+      instrumentOptionsLoaded = true;
       instrumentFilterStatus.textContent = result.instruments && result.instruments.length
         ? 'Pilihan ini menentukan instrumen utama saat membuka partitur.'
         : 'Belum ada instrumen di sheet Instruments.';
+      if (refreshButton) instrumentFilterStatus.textContent = `Daftar instrumen diperbarui (${result.instruments.length}).`;
     }
     window.SongBookCallbacks = window.SongBookCallbacks || {};
     window.SongBookCallbacks[callbackName] = (result) => finish(null, result);
@@ -241,8 +263,18 @@
     const url = new URL(API_URL);
     url.searchParams.set('action', 'instruments');
     url.searchParams.set('callback', `SongBookCallbacks.${callbackName}`);
+    url.searchParams.set('_refresh', String(Date.now()));
     script.src = url.toString();
     document.head.append(script);
+  }
+
+  function prepareInstrumentProfileOptions() {
+    if (!instrumentOptionsLoaded) {
+      instrumentFilterSelect.replaceChildren(new Option('Partitur', ''));
+      if (preferredInstrument) instrumentFilterSelect.add(new Option(preferredInstrument, preferredInstrument));
+      instrumentFilterStatus.textContent = 'Profil tersimpan di perangkat ini. Tekan perbarui untuk mengambil daftar terbaru.';
+    }
+    instrumentFilterSelect.value = preferredInstrument;
   }
 
   function openInstrumentFilterDialog() {
@@ -553,6 +585,11 @@
       ? formatWorshipDate(schedule.date)
       : 'Tanggal belum ditentukan';
     document.getElementById('refresh-schedule-songs-status').textContent = '';
+    const compactButton = document.getElementById('toggle-schedule-compact');
+    compactButton.setAttribute('aria-pressed', String(Boolean(schedule.compactView)));
+    compactButton.setAttribute('aria-label', schedule.compactView ? 'Tampilan lengkap' : 'Tampilan ringkas');
+    compactButton.title = schedule.compactView ? 'Tampilan lengkap' : 'Tampilan ringkas';
+    document.getElementById('schedule-view-dialog').classList.toggle('is-compact', Boolean(schedule.compactView));
     loadScheduleIntro(schedule.id);
     const list = document.getElementById('schedule-view-list');
     const rows = schedule.songs.map((entry, index) => {
@@ -560,7 +597,7 @@
       return `<li class="schedule-song-row${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
         <button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button>
         <span class="schedule-song-order">${index + 1}</span>
-        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview">${escapeText(song.category)} ${escapeText(song.number)} - ${escapeText(song.title)}</button>
+        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} - ${escapeText(song.title || entry.title || '')}</span><span class="schedule-song-compact-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} ${escapeText(song.title || entry.title || '')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span></button>
         <span class="schedule-song-actions">
           <label class="pre-worship-toggle"><input type="checkbox" data-action="toggle-pre-worship" data-entry-id="${escapeText(entry.entryId)}" ${entry.preWorship ? 'checked' : ''}><span>Pra-ibadah</span></label>
           <button type="button" data-action="move-up" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke atas" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
@@ -2045,6 +2082,13 @@
   scheduleViewList.addEventListener('click', handleScheduleRowClick);
   document.getElementById('close-schedule-view').addEventListener('click', () => scheduleViewDialog.close());
   document.getElementById('refresh-schedule-songs').addEventListener('click', refreshViewedScheduleSongsFromLibrary);
+  document.getElementById('toggle-schedule-compact').addEventListener('click', () => {
+    const schedule = schedules.find((item) => item.id === viewedScheduleId);
+    if (!schedule) return;
+    schedule.compactView = !schedule.compactView;
+    saveSchedules();
+    renderScheduleView(schedule.id);
+  });
   scheduleViewDialog.addEventListener('close', () => document.body.classList.remove('schedule-view-open'));
   document.getElementById('add-schedule-intro').addEventListener('click', openScheduleIntroForm);
   removeScheduleIntroButton.addEventListener('click', removeScheduleIntro);
