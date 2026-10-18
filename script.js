@@ -81,6 +81,8 @@
   let editingEntry = null;
   let viewedScheduleId = '';
   let scheduleIntroRequestId = 0;
+  let scheduleIntroCameraStream = null;
+  let capturedScheduleIntroFile = null;
   let introGeneralNavigationActive = false;
   let introGeneralSongIndex = -1;
   let scheduleIntros = readScheduleIntroCache();
@@ -536,6 +538,9 @@
 
   function openScheduleIntroForm() {
     document.getElementById('schedule-intro-file').value = '';
+    document.getElementById('schedule-intro-camera').value = '';
+    capturedScheduleIntroFile = null;
+    document.getElementById('schedule-intro-file-name').textContent = 'Pilih gambar dari perangkat atau ambil foto dengan kamera.';
     document.getElementById('schedule-intro-status').textContent = '';
     if (!scheduleIntroDialog.open) scheduleIntroDialog.showModal();
   }
@@ -591,7 +596,9 @@
     event.preventDefault();
     const schedule = schedules.find((item) => item.id === viewedScheduleId);
     const name = 'Intro';
-    const file = document.getElementById('schedule-intro-file').files[0];
+    const file = document.getElementById('schedule-intro-file').files[0]
+      || document.getElementById('schedule-intro-camera').files[0]
+      || capturedScheduleIntroFile;
     const statusEl = document.getElementById('schedule-intro-status');
     if (!schedule || !file) { statusEl.textContent = 'Pilih gambar intro.'; return; }
     if (!file.type.startsWith('image/')) { statusEl.textContent = 'Pilih file gambar yang valid.'; return; }
@@ -1857,6 +1864,91 @@
     openScheduleIntroImage(currentPreviewSong && currentPreviewSong.scheduleIntro, true);
   });
   document.getElementById('close-schedule-intro').addEventListener('click', () => scheduleIntroDialog.close());
+  const scheduleIntroFileInput = document.getElementById('schedule-intro-file');
+  const scheduleIntroCameraInput = document.getElementById('schedule-intro-camera');
+  const scheduleIntroCameraDialog = document.getElementById('schedule-intro-camera-dialog');
+  const scheduleIntroCameraPreview = document.getElementById('schedule-intro-camera-preview');
+  const scheduleIntroCameraStatus = document.getElementById('schedule-intro-camera-status');
+  const stopScheduleIntroCamera = () => {
+    if (scheduleIntroCameraStream) scheduleIntroCameraStream.getTracks().forEach((track) => track.stop());
+    scheduleIntroCameraStream = null;
+    scheduleIntroCameraPreview.srcObject = null;
+    document.getElementById('take-schedule-intro-photo').disabled = true;
+  };
+  const openScheduleIntroWebcam = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      document.getElementById('schedule-intro-status').textContent = 'Webcam tidak tersedia. Buka aplikasi melalui HTTPS atau pilih gambar dari perangkat.';
+      return;
+    }
+    scheduleIntroCameraStatus.textContent = 'Meminta izin akses webcam…';
+    scheduleIntroCameraDialog.showModal();
+    try {
+      scheduleIntroCameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      if (!scheduleIntroCameraDialog.open) {
+        stopScheduleIntroCamera();
+        return;
+      }
+      scheduleIntroCameraPreview.srcObject = scheduleIntroCameraStream;
+      await scheduleIntroCameraPreview.play();
+      scheduleIntroCameraStatus.textContent = '';
+      document.getElementById('take-schedule-intro-photo').disabled = false;
+    } catch (error) {
+      stopScheduleIntroCamera();
+      scheduleIntroCameraStatus.textContent = error.name === 'NotAllowedError'
+        ? 'Izin webcam ditolak. Izinkan akses kamera di pengaturan browser.'
+        : 'Webcam tidak dapat dibuka. Periksa koneksi kamera atau pilih gambar dari perangkat.';
+    }
+  };
+  document.getElementById('choose-schedule-intro-file').addEventListener('click', () => {
+    scheduleIntroCameraInput.value = '';
+    capturedScheduleIntroFile = null;
+    scheduleIntroFileInput.click();
+  });
+  document.getElementById('capture-schedule-intro-file').addEventListener('click', () => {
+    scheduleIntroFileInput.value = '';
+    capturedScheduleIntroFile = null;
+    const isMobileDevice = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    if (isMobileDevice) scheduleIntroCameraInput.click();
+    else openScheduleIntroWebcam();
+  });
+  [scheduleIntroFileInput, scheduleIntroCameraInput].forEach((input) => {
+    input.addEventListener('change', () => {
+      const otherInput = input === scheduleIntroFileInput ? scheduleIntroCameraInput : scheduleIntroFileInput;
+      if (input.files.length) otherInput.value = '';
+      const selectedFile = input.files[0] || otherInput.files[0];
+      if (selectedFile) capturedScheduleIntroFile = null;
+      document.getElementById('schedule-intro-file-name').textContent = selectedFile
+        ? selectedFile.name
+        : 'Pilih gambar dari perangkat atau ambil foto dengan kamera.';
+      document.getElementById('schedule-intro-status').textContent = '';
+    });
+  });
+  document.getElementById('close-schedule-intro-camera').addEventListener('click', () => scheduleIntroCameraDialog.close());
+  scheduleIntroCameraDialog.addEventListener('close', stopScheduleIntroCamera);
+  scheduleIntroCameraDialog.addEventListener('click', (event) => { if (event.target === scheduleIntroCameraDialog) scheduleIntroCameraDialog.close(); });
+  document.getElementById('take-schedule-intro-photo').addEventListener('click', () => {
+    const video = scheduleIntroCameraPreview;
+    if (!video.videoWidth || !video.videoHeight) {
+      scheduleIntroCameraStatus.textContent = 'Kamera belum siap. Coba beberapa saat lagi.';
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        scheduleIntroCameraStatus.textContent = 'Foto tidak dapat diproses. Silakan coba lagi.';
+        return;
+      }
+      capturedScheduleIntroFile = new File([blob], `intro-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      scheduleIntroFileInput.value = '';
+      scheduleIntroCameraInput.value = '';
+      document.getElementById('schedule-intro-file-name').textContent = capturedScheduleIntroFile.name;
+      document.getElementById('schedule-intro-status').textContent = '';
+      scheduleIntroCameraDialog.close();
+    }, 'image/jpeg', 0.88);
+  });
   scheduleIntroForm.addEventListener('submit', saveScheduleIntro);
   scheduleIntroDialog.addEventListener('click', (event) => { if (event.target === scheduleIntroDialog) scheduleIntroDialog.close(); });
   document.getElementById('confirm-remove-schedule-intro').addEventListener('click', () => finishIntroRemovalConfirmation(true));
