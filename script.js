@@ -1285,7 +1285,8 @@
       image.setAttribute('role', 'button');
       image.setAttribute('aria-label', `Buka tampilan penuh partitur ${instrument}, halaman ${index + 1}`);
       const showFullImage = () => {
-        introGeneralNavigationActive = Boolean(currentPreviewSong?.scheduleIntro);
+        // Scheduled songs keep their queue context even when the schedule has no Intro.
+        introGeneralNavigationActive = Boolean(currentPreviewSong?.scheduleIntro || currentPreviewSong?.entryId);
         introGeneralSongIndex = introGeneralNavigationActive ? currentSongIndex : -1;
         openFullScoreImage(instrument, index);
       };
@@ -1799,7 +1800,7 @@
     const button = event.target.closest('.score-instrument-button');
     if (!button) return;
     if (!scoreSection.hidden && button.getAttribute('aria-pressed') === 'true') closeScorePreview();
-    else if (currentPreviewSong?.scheduleIntro) {
+    else if (currentPreviewSong?.scheduleIntro || currentPreviewSong?.entryId) {
       introGeneralNavigationActive = true;
       introGeneralSongIndex = currentSongIndex;
       openFullScoreImage(button.dataset.instrument, 0, true);
