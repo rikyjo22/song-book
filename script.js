@@ -125,12 +125,6 @@
     saveInstrumentProfile(instrumentFilterSelect.value);
     closeInstrumentFilterDialog();
   });
-  document.getElementById('clear-instrument-filter').addEventListener('click', () => {
-    saveInstrumentProfile('');
-    instrumentFilterSelect.value = '';
-    closeInstrumentFilterDialog();
-  });
-
   function setStatus(message) { status.textContent = message; }
   function setSyncStatus(message) { syncStatus.textContent = message; }
   function formatTempo(value) {
