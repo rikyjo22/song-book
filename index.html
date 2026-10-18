@@ -3,8 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f4f6f2">
-  <title>Buku Lagu</title>
+  <meta name="theme-color" content="#ffffff">
+  <meta name="application-name" content="Lagu Rohani">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Lagu Rohani">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <title>Lagu Rohani</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -18,7 +25,7 @@
         <div class="library-title-group"><div><p class="eyebrow">KOLEKSI LAGU</p><h2 id="library-title">Semua lagu <span id="song-count" class="count-pill">—</span></h2></div><p id="sync-status" class="sync-status" role="status" aria-live="polite">Memuat data…</p></div>
         <div class="library-actions">
           <button id="collapse-collection" class="collapse-button" type="button" aria-expanded="true" aria-controls="collection-results" title="Ciutkan koleksi">⌃</button>
-                  <button id="refresh-button" class="refresh-button" type="button" aria-label="Perbarui data dari spreadsheet" title="Perbarui data dari spreadsheet"><span aria-hidden="true">↻</span><span>Perbarui data</span></button>
+                  <button id="refresh-button" class="refresh-button" type="button" aria-label="Perbarui data dari database" title="Perbarui data dari database"><span aria-hidden="true">↻</span><span>Perbarui data</span></button>
         </div>
       </div>
       <label class="search-box" for="search-input"><span aria-hidden="true">⌕</span><input id="search-input" type="search" placeholder="Cari judul, nomor, atau lirik…" autocomplete="off"><kbd>/</kbd></label>
@@ -52,13 +59,13 @@
         <div class="schedule-view-footer"><button id="delete-viewed-schedule" class="schedule-delete" type="button">Hapus jadwal</button></div>
       </section>
     </dialog>
-    <footer class="footer-note">Dibuat untuk membantu musik mengalir tanpa jeda.</footer>
+    <footer class="footer-note"><img src="./icons/lagu-rohani-192.png" alt=""> <span>Created by Riky Jo @2026</span></footer>
   </main>
 
   <dialog id="song-dialog" class="song-dialog" aria-labelledby="dialog-title">
     <div class="dialog-frame">
       <header class="dialog-header">
-        <div class="dialog-heading"><p id="dialog-category" class="dialog-category"></p><h2 id="dialog-title"></h2><p id="dialog-meta" class="dialog-meta"></p></div>
+        <div class="dialog-heading"><p id="dialog-category" class="dialog-category"></p><h2 id="dialog-title"></h2><p id="dialog-meta" class="dialog-meta"></p><p id="dialog-credits" class="dialog-credits" hidden></p></div>
         <div class="dialog-header-actions">
           <div id="score-instruments" class="score-instruments" aria-label="Pilih instrumen partitur" hidden></div>
           <button id="close-dialog" class="close-button" type="button" aria-label="Tutup preview">×</button>
@@ -69,6 +76,7 @@
         <div class="chord-controls" aria-label="Pengaturan chord">
           <label class="visually-hidden" for="chord-mode">Tampilan chord</label>
           <select id="chord-mode" aria-label="Tampilan chord"><option value="numbers" selected>Chord angka</option><option value="letters">Chord huruf</option></select>
+          <button id="close-score-preview" class="score-preview-close" type="button" aria-label="Tutup gambar partitur" title="Tutup gambar partitur" hidden>Tutup gambar</button>
           <div id="transpose-controls" class="transpose-controls">
             <button id="transpose-down" type="button" aria-label="Turunkan nada dasar setengah nada">−</button>
             <label class="visually-hidden" for="transpose-key">Nada dasar</label>
@@ -113,7 +121,7 @@
           </span>
         </label>
       </div>
-      <p class="edit-local-note">Perubahan ini hanya berlaku pada lagu di jadwal ini, tidak mengubah spreadsheet.</p>
+      <p class="edit-local-note">Perubahan ini hanya berlaku pada lagu di jadwal ini, tidak mengubah database.</p>
       <div class="edit-dialog-actions"><button id="cancel-schedule-edit" class="edit-cancel" type="button">Batal</button><button class="edit-save" type="submit">Simpan di jadwal</button></div>
     </form>
   </dialog>

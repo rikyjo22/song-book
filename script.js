@@ -2,7 +2,7 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbwCKxOurDR32eAglkvy0qmIzqG5_1q-HUVxmT0UbYA7QZqiO0_PXYEMp4JKS0PDaolL2Q/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbySj5dccqhqMXn16w53BM0fM1XzGAd_8x0G8YR-EOO8tlRHQ_mc9oszy750yHamF_FroQ/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const CATEGORIES = [
@@ -36,6 +36,7 @@
   const transposeControls = document.getElementById('transpose-controls');
   const transposeKeySelect = document.getElementById('transpose-key');
   const scoreSection = document.getElementById('score-section');
+  const closeScorePreviewButton = document.getElementById('close-score-preview');
   const scoreInstruments = document.getElementById('score-instruments');
   const scorePages = document.getElementById('score-pages');
   const scoreCarouselControls = document.getElementById('score-carousel-controls');
@@ -49,10 +50,13 @@
   let currentSongIndex = -1;
   let currentPreviewSongs = [];
   let currentPreviewSong = null;
+  let previewZoom = 1;
+  let pinchStart = null;
   let sourcePreviewKey = 'C';
   let selectedPreviewKey = 'C';
   let callbackCounter = 0;
   let cacheAvailable = false;
+  let isLoadingSongs = false;
   let schedules = [];
   let activeScheduleId = '';
   let draggedRow = null;
@@ -68,6 +72,11 @@
 
   function setStatus(message) { status.textContent = message; }
   function setSyncStatus(message) { syncStatus.textContent = message; }
+  function formatTempo(value) {
+    const tempo = String(value == null ? '' : value).trim().replace(/\s*BPM\s*$/i, '').trim();
+    if (!tempo) return '';
+    return /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(tempo) ? `${tempo} BPM` : tempo;
+  }
   function normalize(value) { return String(value || '').toLocaleLowerCase('id').normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
   function escapeText(value) {
     const span = document.createElement('span');
@@ -76,7 +85,9 @@
   }
 
   function loadSongs() {
-    setSyncStatus('Mengambil data terbaru dari spreadsheet…');
+    if (isLoadingSongs) return;
+    isLoadingSongs = true;
+    setSyncStatus('Mengambil data terbaru dari database...');
     refreshButton.disabled = true;
     refreshButton.classList.add('is-loading');
     const callbackName = `cb_${Date.now()}_${++callbackCounter}`;
@@ -87,6 +98,7 @@
     function finish(error, result) {
       if (settled) return;
       settled = true;
+      isLoadingSongs = false;
       window.clearTimeout(timeout);
       refreshButton.disabled = false;
       refreshButton.classList.remove('is-loading');
@@ -108,7 +120,7 @@
       try {
         localStorage.setItem(CACHE_KEY, JSON.stringify({ updatedAt, songs }));
         cacheAvailable = true;
-        setSyncStatus(`Data spreadsheet diperbarui · ${formatUpdatedAt(updatedAt)}`);
+        setSyncStatus(`Data database diperbarui · ${formatUpdatedAt(updatedAt)}`);
       } catch (storageError) {
         setSyncStatus('Data terbaru dimuat · penyimpanan lokal tidak tersedia');
       }
@@ -276,7 +288,7 @@
     schedule.isOpen = true;
     saveSchedules();
     renderSchedules();
-    scheduleStatus.textContent = `${song.title} ditambahkan ke “${schedule.title || 'Jadwal tanpa nama'}”.`;
+    scheduleStatus.textContent = `${song.title} ditambahkan ke "${schedule.title || 'Jadwal tanpa nama'}".`;
   }
 
   function handleCollectionClick(event) {
@@ -296,6 +308,8 @@
       title: song.title,
       key: song.key || '',
       genre: song.genre || '',
+      songCreator: song.songCreator || '',
+      dateCreate: song.dateCreate || '',
       tempo: song.tempo || '',
       contentHtml: song.contentHtml || '',
       images: song.images && typeof song.images === 'object' ? song.images : {},
@@ -507,7 +521,7 @@
     collectionResults.hidden = collapsed;
     collapseCollectionButton.setAttribute('aria-expanded', String(!collapsed));
     collapseCollectionButton.title = collapsed ? 'Tampilkan koleksi' : 'Ciutkan koleksi';
-    collapseCollectionButton.textContent = collapsed ? '⌄' : '⌃';
+    collapseCollectionButton.textContent = collapsed ? '\u2304' : '\u2303';
   }
 
   function handleSearchInput() {
@@ -554,11 +568,11 @@
     const visible = songs.filter((song) => {
       if (activeCategory !== 'ALL' && song.category !== activeCategory) return false;
       if (!query) return true;
-      return normalize([song.category, song.number, song.title, song.key, song.genre, song.tempo, stripHtml(song.contentHtml)].join(' ')).includes(query);
+      return normalize([song.category, song.number, song.title, song.key, song.genre, song.songCreator, song.dateCreate, song.tempo, stripHtml(song.contentHtml)].join(' ')).includes(query);
     });
     songList.replaceChildren();
     if (!songs.length) {
-      setStatus('Belum ada lagu di spreadsheet. Tambahkan lagu melalui Song Manager.');
+      setStatus('Belum ada lagu di database. Tambahkan lagu melalui Song Manager.');
       return;
     }
     if (!visible.length) {
@@ -572,12 +586,12 @@
       card.className = 'song-card';
       const number = escapeText(song.number);
       const categoryLabel = CATEGORIES.find((entry) => entry.code === song.category);
-      const extra = [song.genre, song.tempo ? `${song.tempo} BPM` : ''].filter(Boolean).map(escapeText).join('<span aria-hidden="true">·</span>');
+      const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo)].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
       const openButton = document.createElement('button');
       openButton.type = 'button';
       openButton.className = 'song-card-main';
       openButton.setAttribute('aria-label', `Buka ${song.category} ${song.number}, ${song.title}`);
-      openButton.innerHTML = `<span class="song-index">${number || '♪'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} · ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">›</span>`;
+      openButton.innerHTML = `<span class="song-index">${number || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
       openButton.addEventListener('click', () => openSong(song));
       card.append(openButton);
       if (schedules.length) {
@@ -627,6 +641,7 @@
       ? queueIndex
       : queue.findIndex((item) => item === song || item.id === song.id);
     currentPreviewSong = song;
+    previewZoom = 1;
     renderScoreInstruments(song.images);
     sourcePreviewKey = normalizeKey(song.key || 'C');
     selectedPreviewKey = sourcePreviewKey;
@@ -640,6 +655,7 @@
     document.getElementById('previous-song').disabled = currentSongIndex <= 0;
     document.getElementById('next-song').disabled = currentSongIndex < 0 || currentSongIndex >= queue.length - 1;
     if (!dialog.open) dialog.showModal();
+    scheduleSongFit();
     preview.scrollTop = 0;
     preview.scrollLeft = 0;
     document.getElementById('close-dialog').focus();
@@ -650,8 +666,14 @@
     const parts = [];
     if (song.key || chordModeSelect.value === 'letters') parts.push(`(${selectedPreviewKey}=1)`);
     if (song.genre) parts.push(song.genre);
-    if (song.tempo) parts.push(`Tempo: ${String(song.tempo).replace(/\s*BPM\s*$/i, '')} BPM`);
+    if (song.tempo) parts.push(`Tempo: ${formatTempo(song.tempo)}`);
     document.getElementById('dialog-meta').textContent = parts.join(' | ');
+    const credits = [];
+    if (song.songCreator) credits.push(`Pencipta: ${song.songCreator}`);
+    if (song.dateCreate) credits.push(`Tahun: ${song.dateCreate}`);
+    const creditsElement = document.getElementById('dialog-credits');
+    creditsElement.textContent = credits.join(' · ');
+    creditsElement.hidden = credits.length === 0;
   }
 
   function renderSongContent() {
@@ -665,7 +687,75 @@
       empty.textContent = 'Lirik dan chord belum tersedia untuk lagu ini.';
       preview.append(empty);
     }
+    const songContent = preview.querySelector('.song-content');
+    if (songContent) songContent.style.zoom = String(previewZoom);
+    scheduleSongFit();
   }
+
+  // Keep each preformatted chord/lyric block on screen as one aligned unit.
+  function fitSongSections() {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    preview.querySelectorAll('.song-section-body, .song-content pre').forEach((body) => {
+      body.style.fontSize = '';
+      const available = body.parentElement.clientWidth || preview.clientWidth;
+      if (!available || !context) return;
+      const style = getComputedStyle(body);
+      const baseSize = parseFloat(style.fontSize) || 14;
+      const lines = (body.innerText || body.textContent).split(/\r?\n/);
+      context.font = `${style.fontWeight} ${baseSize}px ${style.fontFamily}`;
+      const longestWidth = Math.max(0, ...lines.map((line) => context.measureText(line.replace(/\t/g, '    ')).width));
+      if (longestWidth > available) body.style.fontSize = `${baseSize * available / longestWidth * 0.97}px`;
+    });
+  }
+
+  let fitResizeFrame = 0;
+  function scheduleSongFit() {
+    cancelAnimationFrame(fitResizeFrame);
+    // A closed dialog has no layout width. Wait for showModal and its styles to settle.
+    fitResizeFrame = requestAnimationFrame(() => {
+      fitResizeFrame = requestAnimationFrame(fitSongSections);
+    });
+  }
+
+  const songFitObserver = new ResizeObserver(scheduleSongFit);
+  songFitObserver.observe(preview);
+
+  window.addEventListener('resize', () => {
+    scheduleSongFit();
+  }, { passive: true });
+
+  function touchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  preview.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 2) return;
+    pinchStart = { distance: touchDistance(event.touches), zoom: previewZoom };
+  }, { passive: true });
+
+  preview.addEventListener('touchmove', (event) => {
+    if (!pinchStart || event.touches.length !== 2) return;
+    event.preventDefault();
+    const nextZoom = Math.max(0.7, Math.min(2.5, pinchStart.zoom * touchDistance(event.touches) / pinchStart.distance));
+    if (!Number.isFinite(nextZoom)) return;
+    const rect = preview.getBoundingClientRect();
+    const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2 - rect.left;
+    const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2 - rect.top;
+    const ratio = nextZoom / previewZoom;
+    preview.scrollLeft = (preview.scrollLeft + centerX) * ratio - centerX;
+    preview.scrollTop = (preview.scrollTop + centerY) * ratio - centerY;
+    previewZoom = nextZoom;
+    const songContent = preview.querySelector('.song-content');
+    if (songContent) songContent.style.zoom = String(previewZoom);
+  }, { passive: false });
+
+  preview.addEventListener('touchend', (event) => {
+    if (event.touches.length < 2) pinchStart = null;
+  }, { passive: true });
+  preview.addEventListener('touchcancel', () => { pinchStart = null; }, { passive: true });
 
   function renderScoreInstruments(images) {
     scoreInstruments.replaceChildren();
@@ -677,6 +767,7 @@
       : [];
     // Keep the lyric preview unobstructed until an instrument is selected.
     scoreSection.hidden = true;
+    closeScorePreviewButton.hidden = true;
     scoreInstruments.hidden = entries.length === 0;
     entries.forEach(([instrument, files]) => {
       const button = document.createElement('button');
@@ -693,6 +784,7 @@
     const files = currentPreviewSong?.images?.[instrument];
     if (!Array.isArray(files)) return;
     scoreSection.hidden = false;
+    closeScorePreviewButton.hidden = false;
     activeScoreInstrument = instrument;
     activeScoreFiles = files;
     scoreInstruments.querySelectorAll('.score-instrument-button').forEach((button) => {
@@ -785,6 +877,7 @@
 
   function closeScorePreview() {
     scoreSection.hidden = true;
+    closeScorePreviewButton.hidden = true;
     scorePages.hidden = true;
     scoreInstruments.querySelectorAll('.score-instrument-button').forEach((button) => {
       button.setAttribute('aria-pressed', 'false');
@@ -840,7 +933,7 @@
   }
 
   function parseKey(key) {
-    const value = String(key || 'C').replace(/♭/g, 'b').replace(/♯/g, '#').trim();
+    const value = String(key || 'C').replace(/\u266D/g, 'b').replace(/\u266F/g, '#').trim();
     const match = value.match(/^([A-Ga-g])([#b]?)(m)?/);
     if (!match) return { root: 'C', pitch: 0, minor: false };
     const root = `${match[1].toUpperCase()}${match[2]}`;
@@ -1001,6 +1094,7 @@
     if (!scoreSection.hidden && button.getAttribute('aria-pressed') === 'true') closeScorePreview();
     else openScoreInstrument(button.dataset.instrument);
   });
+  closeScorePreviewButton.addEventListener('click', closeScorePreview);
   scorePages.addEventListener('scroll', updateScoreCarouselControls, { passive: true });
   document.getElementById('score-previous').addEventListener('click', () => moveScorePage(-1));
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
@@ -1052,7 +1146,9 @@
   const hasCache = loadCachedSongs();
   if (!hasCache) {
     count.textContent = '0';
-    setStatus('Belum ada data lokal. Tekan “Perbarui data” untuk memuat lagu dari spreadsheet.');
+    setStatus('Belum ada data lokal. Tekan "Perbarui data" untuk memuat lagu dari database.');
     setSyncStatus('Belum disinkronkan');
   }
 })();
+
+
