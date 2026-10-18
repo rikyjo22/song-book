@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="id">
+<html lang="id"> 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -56,7 +56,7 @@
           <div class="schedule-view-header-actions"><div class="schedule-intro-actions"><button id="add-schedule-intro" class="add-schedule-intro" type="button">+ Add intro</button><div id="schedule-intro-actions-group" class="schedule-intro-actions-group" hidden><button id="schedule-intro-name-button" class="schedule-intro-name-button" type="button"></button><button id="remove-schedule-intro" class="remove-schedule-intro" type="button" aria-label="Hapus intro" title="Hapus intro"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button></div></div><button id="close-schedule-view" class="close-button" type="button" aria-label="Tutup jadwal">&#215;</button></div>
         </header>
         <div id="schedule-view-list" class="schedule-view-list"></div>
-        <div class="schedule-view-footer"><button id="delete-viewed-schedule" class="schedule-delete" type="button">Hapus jadwal</button></div>
+        <div class="schedule-view-footer"><div class="schedule-view-footer-leading"><button id="refresh-schedule-songs" class="schedule-refresh-songs" type="button">Perbarui isi lagu</button><span id="refresh-schedule-songs-status" role="status" aria-live="polite"></span></div><button id="delete-viewed-schedule" class="schedule-delete" type="button">Hapus jadwal</button></div>
       </section>
     </dialog>
     <dialog id="schedule-intro-dialog" class="schedule-view-dialog share-dialog" aria-labelledby="schedule-intro-dialog-title"><form id="schedule-intro-form" class="schedule-view-frame share-frame schedule-intro-form"><header class="schedule-view-header"><div><p class="eyebrow">INTRO JADWAL</p><h2 id="schedule-intro-dialog-title">Tambah intro</h2></div><button id="close-schedule-intro" class="close-button" type="button" aria-label="Tutup">&#215;</button></header><div class="share-body"><label class="schedule-field">PILIH GAMBAR<input id="schedule-intro-file" class="share-select" type="file" accept="image/*" capture="environment" required><span class="intro-file-help">Di ponsel, Anda dapat memilih kamera untuk mengambil gambar.</span></label><p id="schedule-intro-status" class="share-status" role="status" aria-live="polite"></p><button id="save-schedule-intro" class="create-schedule-button" type="submit">Simpan intro</button></div></form></dialog>

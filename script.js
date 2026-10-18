@@ -451,6 +451,7 @@
     document.getElementById('schedule-view-date').textContent = schedule.date
       ? formatWorshipDate(schedule.date)
       : 'Tanggal belum ditentukan';
+    document.getElementById('refresh-schedule-songs-status').textContent = '';
     loadScheduleIntro(schedule.id);
     const list = document.getElementById('schedule-view-list');
     const rows = schedule.songs.map((entry, index) => {
@@ -471,6 +472,33 @@
     list.innerHTML = `<article class="schedule-card" data-schedule-id="${escapeText(schedule.id)}">${schedule.songs.length
       ? `<ol class="schedule-song-list">${rows}</ol>`
       : '<p class="schedule-no-songs">Belum ada lagu di jadwal ini. Tambahkan lagu dari koleksi menggunakan tombol +.</p>'}</article>`;
+  }
+
+  function refreshViewedScheduleSongsFromLibrary() {
+    const schedule = schedules.find((item) => item.id === viewedScheduleId);
+    const status = document.getElementById('refresh-schedule-songs-status');
+    if (!schedule) return;
+    let updatedCount = 0;
+    let missingCount = 0;
+    schedule.songs.forEach((entry) => {
+      const latestSong = songs.find((song) => String(song.id) === String(entry.id));
+      if (!latestSong) {
+        missingCount += 1;
+        return;
+      }
+      const entryId = entry.entryId;
+      const preWorship = Boolean(entry.preWorship);
+      Object.assign(entry, createScheduledEntry(latestSong), { entryId, preWorship, overrides: {} });
+      updatedCount += 1;
+    });
+    if (!updatedCount) {
+      status.textContent = missingCount ? 'Tidak ada lagu jadwal yang cocok dengan data lokal.' : 'Jadwal ini belum memiliki lagu.';
+      return;
+    }
+    saveSchedules();
+    renderSchedules();
+    renderScheduleView(schedule.id);
+    status.textContent = `${updatedCount} lagu diperbarui dari data lokal${missingCount ? ` · ${missingCount} lagu tidak ditemukan` : ''}.`;
   }
 
   async function loadScheduleIntro(scheduleId) {
@@ -1816,6 +1844,7 @@
   scheduleViewDialog.addEventListener('click', handleScheduleClick);
   scheduleViewList.addEventListener('click', handleScheduleRowClick);
   document.getElementById('close-schedule-view').addEventListener('click', () => scheduleViewDialog.close());
+  document.getElementById('refresh-schedule-songs').addEventListener('click', refreshViewedScheduleSongsFromLibrary);
   scheduleViewDialog.addEventListener('close', () => document.body.classList.remove('schedule-view-open'));
   document.getElementById('add-schedule-intro').addEventListener('click', openScheduleIntroForm);
   removeScheduleIntroButton.addEventListener('click', removeScheduleIntro);
