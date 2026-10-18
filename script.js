@@ -2,10 +2,11 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbw4MJSreur798HEPHFqY8jgUVLYC1b_Fs_UsGwAq0uXZqBboszAyhPKZNCTQqaWm4hZNQ/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzHIplbDmgbrnMoZXBQNKLVmNQifdNhbUi7j66LTAHSGkRBX3WaBPo4P7y63KP2goxkjw/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_INTRO_CACHE_KEY = 'song-book:schedule-intros:v1';
+  const INSTRUMENT_PROFILE_KEY = 'song-book:instrument-profile:v1';
   const CATEGORIES = [
     { code: 'ALL', label: 'Semua' }, { code: 'PS', label: 'Psallo' },
     { code: 'NR', label: 'Nyanyian Rohani' }, { code: 'SP', label: 'Tambahan' },
@@ -17,6 +18,9 @@
   const count = document.getElementById('song-count');
   const syncStatus = document.getElementById('sync-status');
   const refreshButton = document.getElementById('refresh-button');
+  const instrumentFilterDialog = document.getElementById('instrument-filter-dialog');
+  const instrumentFilterSelect = document.getElementById('instrument-filter-select');
+  const instrumentFilterStatus = document.getElementById('instrument-filter-status');
   const search = document.getElementById('search-input');
   const filters = document.getElementById('category-filters');
   const dialog = document.getElementById('song-dialog');
@@ -63,6 +67,7 @@
   const scoreNextGeneralSongLabel = document.getElementById('score-next-general-song-label');
   let songs = [];
   let activeCategory = 'ALL';
+  let preferredInstrument = readInstrumentProfile();
   let currentSongIndex = -1;
   let currentPreviewSongs = [];
   let currentPreviewSong = null;
@@ -110,6 +115,10 @@
     return /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(tempo) ? `${tempo} BPM` : tempo;
   }
   function normalize(value) { return String(value || '').toLocaleLowerCase('id').normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function readInstrumentProfile() {
+    try { return String(localStorage.getItem(INSTRUMENT_PROFILE_KEY) || '').trim(); }
+    catch (error) { return ''; }
+  }
   function escapeText(value) {
     const span = document.createElement('span');
     span.textContent = String(value == null ? '' : value);
@@ -167,6 +176,47 @@
     script.onerror = () => finish(new Error('Tidak dapat mengakses API Apps Script. Periksa akses deployment dan URL /exec.'));
     const url = new URL(API_URL);
     url.searchParams.set('action', 'songs');
+    url.searchParams.set('callback', `SongBookCallbacks.${callbackName}`);
+    script.src = url.toString();
+    document.head.append(script);
+  }
+
+  function loadInstrumentOptions() {
+    const callbackName = `cb_${Date.now()}_${++callbackCounter}`;
+    const script = document.createElement('script');
+    let settled = false;
+    instrumentFilterStatus.textContent = 'Memuat daftar instrumen…';
+    instrumentFilterSelect.disabled = true;
+    const timeout = window.setTimeout(() => finish(new Error('Waktu koneksi habis.')), 15000);
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      delete window.SongBookCallbacks[callbackName];
+      script.remove();
+      instrumentFilterSelect.disabled = false;
+      if (error || !result || !result.ok) {
+        instrumentFilterStatus.textContent = (result && result.error) || (error && error.message) || 'Daftar instrumen gagal dimuat.';
+        instrumentFilterSelect.replaceChildren(new Option('Gagal memuat instrumen', ''));
+        return;
+      }
+      instrumentFilterSelect.replaceChildren(new Option('Otomatis (Partitur)', ''));
+      (Array.isArray(result.instruments) ? result.instruments : []).forEach((name) => {
+        instrumentFilterSelect.add(new Option(name, name));
+      });
+      if (preferredInstrument && ![...instrumentFilterSelect.options].some((option) => normalize(option.value) === normalize(preferredInstrument))) {
+        instrumentFilterSelect.add(new Option(preferredInstrument, preferredInstrument));
+      }
+      instrumentFilterSelect.value = preferredInstrument;
+      instrumentFilterStatus.textContent = result.instruments && result.instruments.length
+        ? 'Pilihan ini menentukan instrumen utama saat membuka partitur.'
+        : 'Belum ada instrumen di sheet Instruments.';
+    }
+    window.SongBookCallbacks = window.SongBookCallbacks || {};
+    window.SongBookCallbacks[callbackName] = (result) => finish(null, result);
+    script.onerror = () => finish(new Error('Tidak dapat mengakses API Apps Script.'));
+    const url = new URL(API_URL);
+    url.searchParams.set('action', 'instruments');
     url.searchParams.set('callback', `SongBookCallbacks.${callbackName}`);
     script.src = url.toString();
     document.head.append(script);
@@ -1478,9 +1528,34 @@
   function findDefaultScoreInstrument(song) {
     const images = song && song.images && typeof song.images === 'object' ? song.images : {};
     const names = Object.keys(images).filter((name) => Array.isArray(images[name]) && images[name].length);
+    if (preferredInstrument) {
+      const preferred = names.find((name) => normalize(name) === normalize(preferredInstrument));
+      if (preferred) return preferred;
+    }
     return names.find((name) => name.trim().toLowerCase() === 'partitur')
       || names.find((name) => name.trim().toLowerCase() === 'general')
+      || names[0]
       || '';
+  }
+
+  function saveInstrumentProfile(value) {
+    preferredInstrument = String(value || '').trim();
+    try {
+      if (preferredInstrument) localStorage.setItem(INSTRUMENT_PROFILE_KEY, preferredInstrument);
+      else localStorage.removeItem(INSTRUMENT_PROFILE_KEY);
+    } catch (error) { console.warn('Profil instrumen tidak dapat disimpan di perangkat ini:', error); }
+    const button = document.getElementById('instrument-filter-open');
+    button.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
+    button.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
+
+    if (currentPreviewSong) {
+      const instrument = findDefaultScoreInstrument(currentPreviewSong);
+      if (instrument && scoreImageDialog.open && scoreImageMode === 'score') {
+        openFullScoreImage(instrument, 0, true);
+      } else if (instrument && !scoreSection.hidden) {
+        openScoreInstrument(instrument);
+      }
+    }
   }
 
   function formatScoreSongLabel(song) {
@@ -1818,6 +1893,23 @@
   document.getElementById('score-previous').addEventListener('click', () => moveScorePage(-1));
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
   refreshButton.addEventListener('click', loadSongs);
+  document.getElementById('instrument-filter-open').addEventListener('click', () => {
+    instrumentFilterDialog.showModal();
+    loadInstrumentOptions();
+  });
+  document.getElementById('close-instrument-filter').addEventListener('click', () => instrumentFilterDialog.close());
+  instrumentFilterDialog.addEventListener('click', (event) => {
+    if (event.target === instrumentFilterDialog) instrumentFilterDialog.close();
+  });
+  document.getElementById('apply-instrument-filter').addEventListener('click', () => {
+    saveInstrumentProfile(instrumentFilterSelect.value);
+    instrumentFilterDialog.close();
+  });
+  document.getElementById('clear-instrument-filter').addEventListener('click', () => {
+    saveInstrumentProfile('');
+    instrumentFilterSelect.value = '';
+    instrumentFilterDialog.close();
+  });
   document.getElementById('create-schedule').addEventListener('click', addSchedule);
   document.getElementById('share-schedule-open').addEventListener('click', () => { fillShareSchedules(); document.getElementById('share-result').hidden = true; document.getElementById('share-status').textContent = ''; shareDialog.showModal(); });
   document.getElementById('pull-schedule-open').addEventListener('click', () => { document.getElementById('pull-status').textContent = ''; pullDialog.showModal(); });
@@ -1973,6 +2065,9 @@
   targetScheduleSelect.addEventListener('change', () => { activeScheduleId = targetScheduleSelect.value; });
   search.addEventListener('input', handleSearchInput);
   collapseCollectionButton.addEventListener('click', () => setCollectionCollapsed(!isCollectionCollapsed));
+  const instrumentProfileButton = document.getElementById('instrument-filter-open');
+  instrumentProfileButton.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
+  instrumentProfileButton.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
   scheduleList.addEventListener('pointerdown', handleScheduleDragStart);
   scheduleList.addEventListener('pointermove', handleScheduleDragMove);
   scheduleList.addEventListener('pointerup', finishScheduleDrag);

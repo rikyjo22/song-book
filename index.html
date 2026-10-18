@@ -24,8 +24,9 @@
       <div class="library-heading">
         <div class="library-title-group"><div><p class="eyebrow">KOLEKSI LAGU</p><h2 id="library-title">Semua lagu <span id="song-count" class="count-pill">&#8230;</span></h2></div><p id="sync-status" class="sync-status" role="status" aria-live="polite">Memuat data&#8230;</p></div>
         <div class="library-actions">
-          <button id="collapse-collection" class="collapse-button" type="button" aria-expanded="true" aria-controls="collection-results" title="Ciutkan koleksi">^</button>
+          <button id="instrument-filter-open" class="collapse-button instrument-filter-open" type="button" aria-label="Profil instrumen" title="Pilih profil instrumen"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13M9 8l12-2M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm12-2a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg></button>
           <button id="refresh-button" class="refresh-button" type="button" aria-label="Perbarui data dari database" title="Perbarui data dari database"><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.6 9A7 7 0 0 1 18 6.5L20 12M4 12l2 5.5A7 7 0 0 0 18.4 15"/></svg></span><span>Perbarui data</span></button>
+          <button id="collapse-collection" class="collapse-button" type="button" aria-expanded="true" aria-controls="collection-results" title="Ciutkan koleksi">^</button>
         </div>
       </div>
       <label class="search-box" for="search-input"><span aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg></span><input id="search-input" type="search" placeholder="Cari judul, nomor, atau lirik" autocomplete="off"><kbd>/</kbd></label>
@@ -40,6 +41,7 @@
       <div id="song-list" class="song-list" aria-label="Daftar lagu"></div>
       </div>
     </section>
+    <dialog id="instrument-filter-dialog" class="schedule-view-dialog share-dialog" aria-labelledby="instrument-filter-title"><section class="schedule-view-frame share-frame"><header class="schedule-view-header"><div><p class="eyebrow">PREFERENSI PENGGUNA</p><h2 id="instrument-filter-title">Profil instrumen</h2></div><button id="close-instrument-filter" class="close-button" type="button" aria-label="Tutup">&#215;</button></header><div class="share-body"><label class="schedule-field" for="instrument-filter-select">INSTRUMEN PILIHAN<select id="instrument-filter-select" class="share-select"><option value="">Memuat instrumen&#8230;</option></select></label><p id="instrument-filter-status" class="share-status" role="status" aria-live="polite">Pilihan ini menentukan instrumen utama saat membuka partitur.</p><div class="instrument-filter-actions"><button id="clear-instrument-filter" class="intro-delete-cancel" type="button">Gunakan Partitur</button><button id="apply-instrument-filter" class="create-schedule-button" type="button">Simpan profil</button></div></div></section></dialog>
 
     <section class="schedule-panel" aria-labelledby="schedule-title">
       <div class="schedule-heading">
