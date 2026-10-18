@@ -110,10 +110,13 @@
   const instrumentProfileButton = document.getElementById('instrument-filter-open');
   instrumentProfileButton.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
   instrumentProfileButton.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
-  instrumentProfileButton.addEventListener('click', () => {
+  document.addEventListener('click', (event) => {
+    const trigger = event.target.closest('#instrument-filter-open');
+    if (!trigger) return;
+    event.preventDefault();
     openInstrumentFilterDialog();
     loadInstrumentOptions();
-  });
+  }, true);
   document.getElementById('close-instrument-filter').addEventListener('click', closeInstrumentFilterDialog);
   instrumentFilterDialog.addEventListener('click', (event) => {
     if (event.target === instrumentFilterDialog) closeInstrumentFilterDialog();
@@ -1719,12 +1722,16 @@
 
   function populateTransposeKeys() {
     const info = parseKey(selectedPreviewKey);
-    const sharpKeys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const flatKeys = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
-    const useFlats = ['Db', 'Eb', 'Gb', 'Ab', 'Bb'].includes(info.root);
-    const options = (useFlats ? flatKeys : sharpKeys).map((root) => `${root}${info.minor ? 'm' : ''}`);
-    transposeKeySelect.replaceChildren(...options.map((key) => new Option(key, key)));
-    transposeKeySelect.value = options[info.pitch] || options[0];
+    const keyRoots = ['C', 'C#', 'Db', 'D', 'D#', 'Eb', 'E', 'F', 'F#', 'Gb', 'G', 'G#', 'Ab', 'A', 'A#', 'Bb', 'B'];
+    const options = keyRoots.map((root) => {
+      const value = `${root}${info.minor ? 'm' : ''}`;
+      return { value, pitch: parseKey(value).pitch };
+    });
+    transposeKeySelect.replaceChildren(...options.map(({ value }) => new Option(value, value)));
+    const currentValue = `${info.root}${info.minor ? 'm' : ''}`;
+    transposeKeySelect.value = options.some(({ value }) => value === currentValue)
+      ? currentValue
+      : (options.find(({ pitch }) => pitch === info.pitch) || options[0]).value;
     selectedPreviewKey = transposeKeySelect.value;
   }
 
@@ -1750,13 +1757,49 @@
 
   function pitchName(pitch, key) {
     const parsed = parseKey(key);
-    const names = ['C', 'C#', 'D', parsed.root.includes('b') ? 'Eb' : 'D#', 'E', 'F', parsed.root.includes('b') ? 'Gb' : 'F#', 'G', parsed.root.includes('b') ? 'Ab' : 'G#', 'A', parsed.root.includes('b') ? 'Bb' : 'A#', 'B'];
+    const flatFamily = prefersFlatFamily(parsed);
+    const names = ['C', flatFamily ? 'Db' : 'C#', 'D', flatFamily ? 'Eb' : 'D#', 'E', 'F', flatFamily ? 'Gb' : 'F#', 'G', flatFamily ? 'Ab' : 'G#', 'A', flatFamily ? 'Bb' : 'A#', 'B'];
     return names[((pitch % 12) + 12) % 12];
   }
 
+  function prefersFlatFamily(key) {
+    const parsed = typeof key === 'object' && key.root ? key : parseKey(key);
+    return ['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Cb'].includes(parsed.root)
+      || (parsed.minor && ['D', 'G', 'C', 'F', 'Bb', 'Eb', 'Ab'].includes(parsed.root));
+  }
+
+  function spellScaleDegree(degree, key, accidental = '') {
+    const parsedKey = parseKey(key);
+    const letters = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+    const naturalPitches = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+    const naturalNamesByPitch = { 0: 'C', 2: 'D', 4: 'E', 5: 'F', 7: 'G', 9: 'A', 11: 'B' };
+    const rootLetter = parsedKey.root[0];
+    const rootIndex = letters.indexOf(rootLetter);
+    const letter = letters[(rootIndex + degree - 1) % letters.length];
+    const targetPitch = degreePitch(degree, key, accidental);
+    if (Object.prototype.hasOwnProperty.call(naturalNamesByPitch, targetPitch)) {
+      return naturalNamesByPitch[targetPitch];
+    }
+    const difference = (targetPitch - naturalPitches[letter] + 12) % 12;
+    if (difference === 1 && degree !== 1 && prefersFlatFamily(parsedKey)) {
+      return pitchName(targetPitch, key);
+    }
+    if (difference === 0) return letter;
+    if (difference === 1) return `${letter}#`;
+    if (difference === 11) return `${letter}b`;
+    return pitchName(targetPitch, key);
+  }
+
   function parseNumberChord(token) {
-    const match = token.match(/^([b#]?)([1-7])([^/]*)(?:\/([b#]?[1-7]))?$/i);
-    return match ? { accidental: match[1], degree: Number(match[2]), quality: match[3], bass: match[4] || '' } : null;
+    const match = token.match(/^([b#]?)([1-7])([b#]?)([^/]*?)(?:\/([b#]?)([1-7])([b#]?))?$/i);
+    if (!match) return null;
+    const bass = match[6] ? `${match[5] || match[7]}${match[6]}` : '';
+    return {
+      accidental: match[1] || match[3],
+      degree: Number(match[2]),
+      quality: match[4],
+      bass
+    };
   }
 
   function parseLetterChord(token) {
@@ -1775,10 +1818,10 @@
     const scale = scaleFor(key);
     const minor = parseKey(key).minor;
     const defaultQualities = minor ? ['m', 'dim', '', 'm', 'm', '', ''] : ['', 'm', 'm', '', '', 'm', 'dim'];
-    const quality = chord.quality || defaultQualities[chord.degree - 1];
-    const root = pitchName(degreePitch(chord.degree, key, chord.accidental), key);
+    const quality = chord.quality || (chord.accidental ? '' : defaultQualities[chord.degree - 1]);
+    const root = spellScaleDegree(chord.degree, key, chord.accidental);
     const bassMatch = chord.bass.match(/^([b#]?)([1-7])$/);
-    const bass = bassMatch ? `/${pitchName(degreePitch(Number(bassMatch[2]), key, bassMatch[1]), key)}` : '';
+    const bass = bassMatch ? `/${spellScaleDegree(Number(bassMatch[2]), key, bassMatch[1])}` : '';
     return `${root}${quality}${bass}`;
   }
 
@@ -1816,12 +1859,40 @@
   function transformChordLines(fragment, mode, fromKey, toKey) {
     fragment.querySelectorAll('.song-section-body').forEach((body) => {
       const lines = body.textContent.split(/(\r?\n)/);
-      body.textContent = lines.map((line) => {
-        if (/^\r?\n$/.test(line) || !line.trim()) return line;
+      const rendered = document.createDocumentFragment();
+      lines.forEach((line) => {
+        if (/^\r?\n$/.test(line) || !line.trim()) {
+          rendered.append(document.createTextNode(line));
+          return;
+        }
         const tokens = line.trim().split(/\s+/);
         const chordLine = tokens.length > 0 && tokens.every((token) => parseNumberChord(token) || parseLetterChord(token));
-        return chordLine ? line.replace(/\S+/g, (token) => mapChordToken(token, mode, fromKey, toKey)) : line;
-      }).join('');
+        if (!chordLine) {
+          rendered.append(document.createTextNode(line));
+          return;
+        }
+        (line.match(/\s+|\S+/g) || []).forEach((part) => {
+          if (/^\s+$/.test(part)) {
+            rendered.append(document.createTextNode(part));
+            return;
+          }
+          const converted = mapChordToken(part, mode, fromKey, toKey);
+          const chord = parseLetterChord(converted);
+          const extensionIndex = chord ? chord.quality.indexOf('7') : -1;
+          if (extensionIndex < 0) {
+            rendered.append(document.createTextNode(converted));
+            return;
+          }
+          const qualityStart = chord.root.length;
+          const sevenIndex = qualityStart + extensionIndex;
+          rendered.append(document.createTextNode(converted.slice(0, sevenIndex)));
+          const extension = document.createElement('sup');
+          extension.className = 'chord-extension';
+          extension.textContent = '7';
+          rendered.append(extension, document.createTextNode(converted.slice(sevenIndex + 1)));
+        });
+      });
+      body.replaceChildren(rendered);
     });
   }
 
