@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=stacked-song-actions-1">
-  <script defer src="script.js?v=schedule-offline-score-1"></script>
+  <script defer src="script.js?v=optional-song-number-3"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -69,12 +69,12 @@
         <header class="dialog-header"><div class="dialog-heading"><p class="eyebrow">LAGU LOKAL</p><h2 id="my-song-form-title">Detail lagu baru</h2></div><button id="close-my-song-form" class="close-button" type="button" aria-label="Tutup">&#215;</button></header>
         <section class="my-song-form-section"><p class="eyebrow">01 · INFORMASI</p><div class="my-song-fields">
           <label class="schedule-field">KATEGORI<select id="my-song-category" required><option value="">Pilih kategori</option><option value="PS">Psallo (PS)</option><option value="NR">Nyanyian Rohani (NR)</option><option value="SP">Tambahan (SP)</option><option value="ZR">Zangkoor (ZR)</option><option value="KMR">Kaum Muda (KMR)</option><option value="SM">Sekolah Minggu (SM)</option><option value="OTH">Other (OTH)</option></select></label>
-          <label class="schedule-field">NOMOR (OPSIONAL)<small class="optional-hint">Boleh dikosongkan jika tidak ada</small><input id="my-song-number" placeholder="Kosongkan untuk nomor acak"></label><label class="schedule-field my-song-wide">JUDUL LAGU<input id="my-song-title" required placeholder="Contoh: Kasih dari Sorga"></label>
+          <label class="schedule-field">NOMOR (OPSIONAL)<small class="optional-hint">Boleh dikosongkan jika tidak ada</small><input id="my-song-number" placeholder="Boleh dikosongkan"></label><label class="schedule-field my-song-wide">JUDUL LAGU<input id="my-song-title" required placeholder="Contoh: Kasih dari Sorga"></label>
           <label class="schedule-field">NADA DASAR<input id="my-song-key" placeholder="C, D♭, Am"></label><label class="schedule-field">JENIS MUSIK<input id="my-song-genre" placeholder="Hymne"></label><label class="schedule-field">PENCIPTA LAGU<input id="my-song-creator"></label><label class="schedule-field">TAHUN<input id="my-song-date" placeholder="1984"></label><label class="schedule-field">TEMPO<input id="my-song-tempo" placeholder="96 atau Allegro"></label>
         </div></section>
         <section class="my-song-form-section"><p class="eyebrow">02 · KONTEN</p><label class="schedule-field">LIRIK DAN CHORD<span class="my-song-editor-hint">Penanda bagian seperti [Intro], [Bait 1], [Reff], atau [Bridge] akan disorot otomatis.</span><span class="my-song-content-wrap"><pre id="my-song-highlight" class="my-song-highlight" aria-hidden="true"></pre><textarea id="my-song-content" required spellcheck="false" wrap="off" aria-label="Lirik dan chord" placeholder="[Intro]&#10;G   D   Em&#10;&#10;[Bait 1]&#10;Lirik lagu"></textarea></span></label></section>
         <section class="my-song-form-section"><div class="my-song-section-title"><p class="eyebrow">03 · PARTITUR</p><button id="add-my-song-instrument" class="schedule-refresh-songs" type="button">+ Tambah instrumen</button></div><div id="my-song-instruments" class="my-song-instruments"></div><p class="my-song-file-note">Gambar disimpan lokal dengan nama kategori, nomor, judul, dan instrumen.</p></section>
-        <footer class="my-song-form-footer"><p id="my-song-form-status" role="status" aria-live="polite">Field kategori, nomor, judul, dan lirik wajib diisi.</p><button id="save-my-song" class="create-schedule-button" type="submit">Simpan lagu</button></footer>
+        <footer class="my-song-form-footer"><p id="my-song-form-status" role="status" aria-live="polite">Hanya kategori, judul, dan lirik yang wajib diisi.</p><button id="save-my-song" class="create-schedule-button" type="submit">Simpan lagu</button></footer>
       </form>
     </dialog>
     <dialog id="delete-my-song-dialog" class="schedule-view-dialog share-dialog" aria-labelledby="delete-my-song-title"><section class="schedule-view-frame share-frame"><header class="schedule-view-header"><div><p class="eyebrow">KONFIRMASI</p><h2 id="delete-my-song-title">Hapus lagu?</h2></div><button id="close-delete-my-song" class="close-button" type="button" aria-label="Batal">&#215;</button></header><div class="share-body"><p id="delete-my-song-message" class="intro-delete-message"></p><div class="intro-delete-actions"><button id="cancel-delete-my-song" class="intro-delete-cancel" type="button">Batal</button><button id="confirm-delete-my-song" class="intro-delete-confirm" type="button">Hapus lagu</button></div></div></section></dialog>

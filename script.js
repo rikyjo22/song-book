@@ -2,7 +2,7 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbykCJAM0KYYHGihjbhn15Pn4RVG4PdTWHl2-DF-BC81DMiw66GeDTetsV6WZ0xD_El9UA/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzB0sm4UrusQgjPHyC_n8QDy9SdbT5gCi0gvzN-nW-5yocuas7Jr0m3PXcUrrhhgicwOg/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
@@ -199,9 +199,6 @@
       title = title.replace(new RegExp(`^(?:${escapeRegExp(category)}\\s+)?${escapeRegExp(rawNumber)}\\s*(?:[-\\u2013\\u2014:|]\\s*|\\s+)`, 'i'), '').trim();
     }
     return title;
-  }
-  function createRandomSongNumber() {
-    return Array.from({ length: 3 }, () => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(Math.random() * 26)]).join('');
   }
   function normalize(value) { return String(value || '').toLocaleLowerCase('id').normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
   function readInstrumentProfile() {
@@ -1965,7 +1962,7 @@
     statusEl.textContent = 'Menyimpan di perangkat ini…';
     try {
       const category = document.getElementById('my-song-category').value;
-      const number = document.getElementById('my-song-number').value.trim() || createRandomSongNumber();
+      const number = document.getElementById('my-song-number').value.trim();
       const title = document.getElementById('my-song-title').value.trim();
       const stem = safeLocalFilePart(`${category} ${number} ${title}`);
       const images = {};
@@ -1998,7 +1995,7 @@
         songCreator: document.getElementById('my-song-creator').value.trim(),
         dateCreate: document.getElementById('my-song-date').value.trim(),
         tempo: document.getElementById('my-song-tempo').value.trim(),
-        contentHtml: `<pre>${escapeText(document.getElementById('my-song-content').value)}</pre>`,
+        contentHtml: editableTextToHtml(document.getElementById('my-song-content').value),
         images,
         storedAt: editingMySong?.storedAt || Date.now(),
         localUpdatedAt: Date.now()
@@ -2094,13 +2091,13 @@
     updateMySongHighlight();
     document.getElementById('my-song-form-title').textContent = 'Detail lagu baru';
     document.getElementById('save-my-song').textContent = 'Simpan lagu';
-    document.getElementById('my-song-form-status').textContent = 'Field kategori, nomor, judul, dan lirik wajib diisi.';
+    document.getElementById('my-song-form-status').textContent = 'Hanya kategori, judul, dan lirik yang wajib diisi.';
     mySongDialog.showModal();
   });
   document.getElementById('close-my-song-form').addEventListener('click', () => mySongDialog.close());
   document.getElementById('close-my-song-image-preview').addEventListener('click', () => document.getElementById('my-song-image-preview').close());
   document.getElementById('my-song-image-preview').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
-  document.getElementById('add-my-song-instrument').addEventListener('click', addMySongInstrument);
+  document.getElementById('add-my-song-instrument').addEventListener('click', () => addMySongInstrument());
   mySongForm.addEventListener('submit', saveMySong);
   mySongDialog.addEventListener('click', (event) => { if (event.target === mySongDialog) mySongDialog.close(); });
   document.getElementById('confirm-delete-my-song').addEventListener('click', () => finishMySongDeletion(true));
@@ -2161,6 +2158,13 @@
     const root = document.createDocumentFragment();
     [...parsed.body.childNodes].forEach((node) => root.append(copyNode(node)));
     return root;
+  }
+
+  function previewSongFragment(contentHtml) {
+    const parsed = new DOMParser().parseFromString(String(contentHtml || ''), 'text/html');
+    const isStructured = Boolean(parsed.querySelector('.song-content, .song-section, .song-section-body'));
+    const previewHtml = isStructured ? contentHtml : editableTextToHtml(htmlToEditableText(contentHtml));
+    return safeSongFragment(previewHtml);
   }
 
   function openSong(song, queue = songs, queueIndex, showPreview = true) {
@@ -2226,7 +2230,7 @@
 
   function renderSongContent() {
     preview.replaceChildren();
-    const content = safeSongFragment(currentPreviewSong.contentHtml);
+    const content = previewSongFragment(currentPreviewSong.contentHtml);
     transformChordLines(content, chordModeSelect.value, sourcePreviewKey, selectedPreviewKey);
     if (content.childNodes.length) preview.append(content);
     else {
