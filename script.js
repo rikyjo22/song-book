@@ -2,9 +2,10 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbwlxbL5JgMqGv6zrF9RbqaF3XQJ9gWq8NW-QB9PPtUTFiC5O6ySXX2USVsSNSyK8jNe5w/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbykCJAM0KYYHGihjbhn15Pn4RVG4PdTWHl2-DF-BC81DMiw66GeDTetsV6WZ0xD_El9UA/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
+  const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
   const ACTIVE_SCHEDULE_KEY = 'song-book:active-worship-schedule:v1';
   const ACTIVE_SCHEDULE_SHARE_KEY = 'song-book:active-schedule-share:v1';
   const SCHEDULE_INTRO_CACHE_KEY = 'song-book:schedule-intros:v1';
@@ -136,6 +137,8 @@
   const pullDialog = document.getElementById('schedule-pull-dialog');
   let shareTimer = 0;
   let activeScheduleShare = readActiveScheduleShare();
+  let isCachingScheduleImages = false;
+  const scheduleImageObjectUrls = new Map();
   let shareExpiresAt = activeScheduleShare ? activeScheduleShare.expiresAt : 0;
 
   const instrumentProfileButton = document.getElementById('instrument-filter-open');
@@ -183,6 +186,23 @@
     const tempo = String(value == null ? '' : value).trim().replace(/\s*BPM\s*$/i, '').trim();
     if (!tempo) return '';
     return /^[+-]?(?:\d+(?:[.,]\d*)?|[.,]\d+)$/.test(tempo) ? `${tempo} BPM` : tempo;
+  }
+  function displaySongNumber(value) {
+    const number = String(value || '').trim();
+    return /^\d+$/.test(number) ? number : '';
+  }
+  function displaySongTitle(song) {
+    let title = String(song && song.title || '').trim();
+    const category = String(song && song.category || '').trim();
+    const rawNumber = String(song && song.number || '').trim();
+    if (category && rawNumber && !displaySongNumber(rawNumber)) {
+      const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      title = title.replace(new RegExp(`^(?:${escapeRegExp(category)}\\s+)?${escapeRegExp(rawNumber)}\\s*(?:[-\\u2013\\u2014:|]\\s*|\\s+)`, 'i'), '').trim();
+    }
+    return title;
+  }
+  function createRandomSongNumber() {
+    return Array.from({ length: 3 }, () => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(Math.random() * 26)]).join('');
   }
   function normalize(value) { return String(value || '').toLocaleLowerCase('id').normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
   function readInstrumentProfile() {
@@ -305,6 +325,7 @@
       buildFilters();
       renderList();
       renderSchedules();
+      cacheExistingScheduleImagesOffline();
     }
 
     window.SongBookCallbacks = window.SongBookCallbacks || {};
@@ -664,9 +685,11 @@
         return;
       }
       const durationMinutes = Number(document.getElementById('share-duration-select').value) || 15;
-      const sharedSongs = (schedule.songs || []).map((entry) => String(entry.id || '').startsWith('local_')
-        ? { ...entry, localSourceName: sharedByName }
-        : entry);
+      const sharedSongs = (schedule.songs || []).map((entry) => ({
+        ...entry,
+        ...(String(entry.id || '').startsWith('local_') ? { localSourceName: sharedByName } : {}),
+        images: imagesForScheduleShare(entry.images || {})
+      }));
       const result = await postScheduleApi('shareSchedule', { sharedByName, durationMinutes, schedule: { ...schedule, sharedByName, songs: sharedSongs, intro: intro || null } });
       document.getElementById('share-code').textContent = result.code;
       document.getElementById('share-result').hidden = false;
@@ -715,6 +738,10 @@
       const sharerName = `${rawSharerName.charAt(0).toLocaleUpperCase('id')}${rawSharerName.slice(1)}`;
       const sourceTitle = String(received.title || 'Jadwal ibadah').replace(/\s*\(salinan(?:\s+dari[^)]*)?\)\s*$/i, '').trim() || 'Jadwal ibadah';
       const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
+      for (const entry of imported.songs) {
+        const cachedImages = await cacheScheduleImagesOffline(entry.images || {});
+        entry.images = cachedImages.images;
+      }
       schedules.unshift(imported);
       activeScheduleId = imported.id;
       saveSchedules();
@@ -779,14 +806,16 @@
     const list = document.getElementById('schedule-view-list');
     const rows = schedule.songs.map((entry, index) => {
       const song = getEffectiveScheduledSong(entry);
+      const visibleNumber = displaySongNumber(song.number || entry.number);
       const sourceClass = String(entry.id || '').startsWith('local_') ? ' is-local-song' : ' is-database-song';
       const localAttribution = entry.localSourceName ? `<span class="schedule-song-attribution">Diambil dari data lokal “${escapeText(entry.localSourceName)}”</span>` : '';
       return `<li class="schedule-song-row${sourceClass}${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
         <button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button>
         <span class="schedule-song-order">${index + 1}</span>
-        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} - ${escapeText(song.title || entry.title || '')}</span><span class="schedule-song-compact-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} ${escapeText(song.title || entry.title || '')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span>${localAttribution}</button>
+        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}</span><span class="schedule-song-compact-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span>${localAttribution}</button>
         <span class="schedule-song-actions">
           <label class="pre-worship-toggle"><input type="checkbox" data-action="toggle-pre-worship" data-entry-id="${escapeText(entry.entryId)}" ${entry.preWorship ? 'checked' : ''}><span>Pra-ibadah</span></label>
+          <button type="button" data-action="copy-to-my-songs" data-entry-id="${escapeText(entry.entryId)}" aria-label="Add to Laguku: ${escapeText(song.title || entry.title || '')}" title="Add to Laguku">Laguku</button>
           <button type="button" data-action="move-up" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke atas" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
           <button type="button" data-action="move-down" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke bawah" ${index === schedule.songs.length - 1 ? 'disabled' : ''}>&#8595;</button>
           <button type="button" data-action="edit-song" data-entry-id="${escapeText(entry.entryId)}" aria-label="Edit lagu di jadwal">&#9998;</button>
@@ -799,23 +828,24 @@
       : '<p class="schedule-no-songs">Belum ada lagu di jadwal ini. Tambahkan lagu dari koleksi menggunakan tombol +.</p>'}</article>`;
   }
 
-  function refreshViewedScheduleSongsFromLibrary() {
+  async function refreshViewedScheduleSongsFromLibrary() {
     const schedule = schedules.find((item) => item.id === viewedScheduleId);
     const status = document.getElementById('refresh-schedule-songs-status');
     if (!schedule) return;
     let updatedCount = 0;
     let missingCount = 0;
-    schedule.songs.forEach((entry) => {
+    for (const entry of schedule.songs) {
       const latestSong = songs.find((song) => String(song.id) === String(entry.id));
       if (!latestSong) {
         missingCount += 1;
-        return;
+        continue;
       }
       const entryId = entry.entryId;
       const preWorship = Boolean(entry.preWorship);
-      Object.assign(entry, createScheduledEntry(latestSong), { entryId, preWorship, overrides: {} });
+      const cached = await cacheScheduleImagesOffline(latestSong.images || {});
+      Object.assign(entry, createScheduledEntry(latestSong, cached.images), { entryId, preWorship, overrides: {} });
       updatedCount += 1;
-    });
+    }
     if (!updatedCount) {
       status.textContent = missingCount ? 'Tidak ada lagu jadwal yang cocok dengan data lokal.' : 'Jadwal ini belum memiliki lagu.';
       return;
@@ -1001,16 +1031,49 @@
     deleteScheduleDialog.showModal();
   }
 
-  function finishScheduleDeletion(confirmed) {
+  async function finishScheduleDeletion(confirmed) {
     const scheduleId = pendingScheduleDeletionId;
     pendingScheduleDeletionId = '';
     if (deleteScheduleDialog.open) deleteScheduleDialog.close();
     if (!confirmed || !scheduleId) return;
+    const removedSchedule = schedules.find((schedule) => schedule.id === scheduleId);
+    if (removedSchedule) await removeScheduleOfflineImages(removedSchedule.songs || []);
     schedules = schedules.filter((schedule) => schedule.id !== scheduleId);
     saveSchedules();
     renderSchedules();
     renderList();
     if (viewedScheduleId === scheduleId && scheduleViewDialog.open) scheduleViewDialog.close();
+  }
+
+  async function removeScheduleOfflineImages(entries) {
+    const keys = new Set();
+    (entries || []).forEach((entry) => {
+      Object.values(entry.images || {}).forEach((files) => {
+        (Array.isArray(files) ? files : []).forEach((file) => {
+          if (file && typeof file === 'object' && file.localCacheKey) keys.add(String(file.localCacheKey));
+        });
+      });
+    });
+    if (!keys.size) return;
+    try {
+      const db = await openScheduleImageDatabase();
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction('images', 'readwrite');
+        const store = transaction.objectStore('images');
+        keys.forEach((key) => store.delete(key));
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('Gagal menghapus salinan gambar jadwal.'));
+      });
+      db.close();
+    } catch (error) {
+      console.warn('Salinan gambar offline jadwal tidak dapat dibersihkan:', error);
+    }
+    keys.forEach((key) => {
+      const objectUrl = scheduleImageObjectUrls.get(key);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      scheduleImageObjectUrls.delete(key);
+    });
   }
 
   function renderScheduleTargets() {
@@ -1041,18 +1104,30 @@
     window.setTimeout(() => card.classList.remove('schedule-just-imported'), 7000);
   }
 
-  function addSongToSchedule(songId) {
+  async function addSongToSchedule(songId) {
     const schedule = schedules.find((item) => item.id === activeScheduleId);
     const song = songs.find((item) => item.id === songId) || mySongs.find((item) => item.id === songId);
     if (!schedule || !song) return;
-    schedule.songs.push(createScheduledEntry(song));
-    schedule.isOpen = true;
+    scheduleStatus.textContent = 'Menyalin gambar lagu ke penyimpanan lokal…';
+    const cached = await cacheScheduleImagesOffline(song.images || {});
+    const currentSchedule = schedules.find((item) => item.id === schedule.id);
+    if (!currentSchedule) return;
+    currentSchedule.songs.push(createScheduledEntry(song, cached.images));
+    currentSchedule.isOpen = true;
     saveSchedules();
     renderSchedules();
-    scheduleStatus.textContent = `${song.title} ditambahkan ke "${schedule.title || 'Jadwal tanpa nama'}".`;
+    scheduleStatus.textContent = `${song.title} ditambahkan ke "${currentSchedule.title || 'Jadwal tanpa nama'}"${cached.failed ? `. ${cached.failed} gambar belum tersimpan untuk akses offline.` : '.'}`;
   }
 
   function handleCollectionClick(event) {
+    const saveLocalButton = event.target.closest('[data-save-song-to-my-songs]');
+    if (saveLocalButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const song = songs.find((item) => String(item.id) === String(saveLocalButton.dataset.saveSongToMySongs));
+      if (song) addSongToMySongs(song, song.id);
+      return;
+    }
     const addButton = event.target.closest('[data-add-song]');
     if (!addButton) return;
     event.preventDefault();
@@ -1083,7 +1158,7 @@
     scheduleStatus.textContent = `Jadwal aktif: ${selected.title || 'Jadwal tanpa nama'}.`;
   }
 
-  function createScheduledEntry(song) {
+  function createScheduledEntry(song, images = song.images || {}) {
     return {
       entryId: `entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       id: song.id,
@@ -1096,7 +1171,7 @@
       dateCreate: song.dateCreate || '',
       tempo: song.tempo || '',
       contentHtml: song.contentHtml || '',
-      images: song.id && song.id.startsWith('local_') ? {} : (song.images && typeof song.images === 'object' ? song.images : {}),
+      images: images && typeof images === 'object' ? images : {},
       overrides: {}
     };
   }
@@ -1105,7 +1180,143 @@
     // Entries created before local snapshots only contain a spreadsheet song ID.
     // Use the cached library record as their base, then apply the schedule copy.
     const sourceSong = songs.find((song) => song.id === entry.id) || mySongs.find((song) => song.id === entry.id) || {};
-    return { ...sourceSong, ...entry, ...(entry.overrides || {}), ...(String(entry.id).startsWith('local_') ? { images: sourceSong.images || {} } : {}) };
+    const entryImages = entry.images && typeof entry.images === 'object' && Object.keys(entry.images).length ? entry.images : sourceSong.images || {};
+    return { ...sourceSong, ...entry, ...(entry.overrides || {}), images: entryImages };
+  }
+
+  function openScheduleImageDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(SCHEDULE_IMAGE_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('images')) request.result.createObjectStore('images', { keyPath: 'key' });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Penyimpanan gambar jadwal tidak tersedia.'));
+    });
+  }
+
+  async function storeScheduleImage(key, blob) {
+    const db = await openScheduleImageDatabase();
+    await new Promise((resolve, reject) => {
+      const request = db.transaction('images', 'readwrite').objectStore('images').put({ key, blob, mimeType: blob.type || 'image/jpeg' });
+      request.onsuccess = resolve;
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    const previousUrl = scheduleImageObjectUrls.get(key);
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    scheduleImageObjectUrls.set(key, URL.createObjectURL(blob));
+  }
+
+  async function getScheduleImageObjectUrl(key) {
+    if (scheduleImageObjectUrls.has(key)) return scheduleImageObjectUrls.get(key);
+    const db = await openScheduleImageDatabase();
+    const record = await new Promise((resolve, reject) => {
+      const request = db.transaction('images', 'readonly').objectStore('images').get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    if (!record || !record.blob) return '';
+    const objectUrl = URL.createObjectURL(record.blob);
+    scheduleImageObjectUrls.set(key, objectUrl);
+    return objectUrl;
+  }
+
+  async function cacheScheduleImagesOffline(images) {
+    const cachedImages = {};
+    let failed = 0;
+    for (const [instrument, files] of Object.entries(images || {})) {
+      if (!Array.isArray(files)) continue;
+      cachedImages[instrument] = [];
+      for (const file of files) {
+        const source = typeof file === 'string' ? file : String(file?.url || file?.dataUrl || file?.data || '');
+        if (file && typeof file === 'object' && file.localCacheKey) {
+          try {
+            if (await getScheduleImageObjectUrl(file.localCacheKey)) {
+              cachedImages[instrument].push(file);
+              continue;
+            }
+          } catch (error) {}
+        }
+        const isDataUrl = /^data:image\//i.test(source);
+        const imageId = isDataUrl ? '' : scoreImageId(file);
+        if (isDataUrl || imageId) {
+          const cacheKey = `schedule-image_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+          try {
+            let blob;
+            let metadata = typeof file === 'object' && file ? { ...file } : {};
+            if (isDataUrl) {
+              blob = await fetch(source).then((response) => response.blob());
+              delete metadata.url;
+              delete metadata.dataUrl;
+              delete metadata.data;
+              delete metadata.driveUrl;
+            } else {
+              const image = await postScheduleApi('cacheScheduleImage', { imageId }, 60000);
+              const bytes = Uint8Array.from(atob(image.base64), (char) => char.charCodeAt(0));
+              blob = new Blob([bytes], { type: image.mimeType || 'image/jpeg' });
+              metadata = { ...metadata, url: source, driveUrl: file?.driveUrl || source, name: image.name || file?.name || '', mimeType: image.mimeType || 'image/jpeg' };
+            }
+            if (!blob.type.startsWith('image/')) throw new Error('Data bukan gambar.');
+            await storeScheduleImage(cacheKey, blob);
+            cachedImages[instrument].push({ ...metadata, localCacheKey: cacheKey });
+          } catch (error) {
+            cachedImages[instrument].push(file);
+            failed += 1;
+          }
+          continue;
+        }
+        cachedImages[instrument].push(file);
+      }
+    }
+    return { images: cachedImages, failed };
+  }
+
+  function imagesForScheduleShare(images) {
+    const shareable = {};
+    Object.entries(images || {}).forEach(([instrument, files]) => {
+      if (!Array.isArray(files)) return;
+      shareable[instrument] = files.map((file) => {
+        if (typeof file === 'string') return /^data:image\//i.test(file) ? '' : file;
+        const image = { ...file };
+        if (/^data:image\//i.test(String(image.url || ''))) image.url = image.driveUrl || '';
+        delete image.driveUrl;
+        delete image.localCacheKey;
+        return image;
+      });
+    });
+    return shareable;
+  }
+
+  async function cacheExistingScheduleImagesOffline() {
+    if (isCachingScheduleImages) return;
+    isCachingScheduleImages = true;
+    let changed = false;
+    try {
+      for (const schedule of schedules) {
+        for (const entry of schedule.songs || []) {
+          const sourceSong = songs.find((song) => song.id === entry.id) || mySongs.find((song) => song.id === entry.id) || {};
+          const images = entry.images && Object.keys(entry.images).length ? entry.images : sourceSong.images || {};
+          const needsCopy = Object.values(images).some((files) => Array.isArray(files) && files.some((file) => {
+            const source = typeof file === 'string' ? file : String(file?.url || file?.dataUrl || file?.data || '');
+            return Boolean(file?.localCacheKey) || (source && (/^data:image\//i.test(source) || Boolean(scoreImageId(file))));
+          }));
+          if (!needsCopy) continue;
+          const result = await cacheScheduleImagesOffline(images);
+          if (Object.values(result.images).some((files) => files.some((file) => typeof file === 'object' && file.localCacheKey))) {
+            entry.images = result.images;
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        saveSchedules();
+        renderSchedules();
+      }
+    } finally {
+      isCachingScheduleImages = false;
+    }
   }
 
   function handleScheduleClick(event) {
@@ -1125,6 +1336,17 @@
       return;
     }
     const action = button ? button.dataset.action : '';
+
+    if (action === 'copy-to-my-songs') {
+      const entry = schedule.songs.find((item) => item.entryId === button.dataset.entryId);
+      if (!entry) return;
+      const effectiveSong = getEffectiveScheduledSong(entry);
+      const sourceSong = songs.find((item) => String(item.id) === String(entry.id))
+        || mySongs.find((item) => String(item.id) === String(entry.id))
+        || effectiveSong;
+      addSongToMySongs({ ...sourceSong, ...effectiveSong, images: sourceSong.images || effectiveSong.images || {} }, entry.id);
+      return;
+    }
 
     if (action === 'view-schedule') {
       renderScheduleView(schedule.id);
@@ -1385,27 +1607,38 @@
     visible.forEach((song) => {
       const card = document.createElement('article');
       card.className = 'song-card';
-      const number = escapeText(song.number);
+      const number = escapeText(displaySongNumber(song.number));
       const categoryLabel = CATEGORIES.find((entry) => entry.code === song.category);
       const showUploader = song.uploader && String(song.uploader).trim().toLowerCase() !== 'admin';
       const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo), showUploader ? `Uploader: ${song.uploader}` : ''].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
       const openButton = document.createElement('button');
       openButton.type = 'button';
       openButton.className = 'song-card-main';
-      openButton.setAttribute('aria-label', `Buka ${song.category} ${song.number}, ${song.title}`);
+      openButton.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}`);
       openButton.innerHTML = `<span class="song-index">${number || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
       openButton.addEventListener('click', () => openSong(song));
       card.append(openButton);
+      const quickActions = document.createElement('span');
+      quickActions.className = 'song-card-quick-actions';
       if (schedules.length) {
         const addButton = document.createElement('button');
         addButton.type = 'button';
         addButton.className = 'add-to-schedule';
         addButton.dataset.addSong = song.id;
         addButton.setAttribute('aria-label', `Tambahkan ${song.title} ke jadwal terpilih`);
-        addButton.title = 'Tambahkan ke jadwal terpilih';
-        addButton.textContent = '+';
-        card.append(addButton);
+        addButton.title = 'Add to Jadwal';
+        addButton.textContent = 'Add to Jadwal';
+        quickActions.append(addButton);
       }
+      const saveLocalButton = document.createElement('button');
+      saveLocalButton.type = 'button';
+      saveLocalButton.className = 'add-to-my-songs';
+      saveLocalButton.dataset.saveSongToMySongs = song.id;
+      saveLocalButton.textContent = 'Add to Laguku';
+      saveLocalButton.setAttribute('aria-label', `Add ${song.category} ${displaySongNumber(song.number)} ${song.title} to Laguku`);
+      saveLocalButton.title = 'Simpan salinan lagu ini ke Laguku di perangkat';
+      quickActions.append(saveLocalButton);
+      card.append(quickActions);
       fragment.append(card);
     });
     songList.append(fragment);
@@ -1440,7 +1673,7 @@
       if (isMySongUploadMode) {
         const choice = document.createElement('label');
         choice.className = 'my-song-upload-choice';
-        choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}><span class="song-index">${escapeText(song.number) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span>`;
+        choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}><span class="song-index">${escapeText(displaySongNumber(song.number)) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span>`;
         card.append(choice);
         fragment.append(card);
         return;
@@ -1448,8 +1681,8 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'song-card-main';
-      button.setAttribute('aria-label', `Buka ${song.category} ${song.number}, ${song.title}`);
-      button.innerHTML = `<span class="song-index">${escapeText(song.number) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
+      button.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}`);
+      button.innerHTML = `<span class="song-index">${escapeText(displaySongNumber(song.number)) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
       button.addEventListener('click', () => openSong(song, visible, index));
       card.append(button);
       const actions = document.createElement('span');
@@ -1537,7 +1770,7 @@
       successList.replaceChildren();
       selected.forEach((song) => {
         const item = document.createElement('li');
-        item.textContent = `${song.category || ''} ${song.number || ''} ${song.title || ''} berhasil dikirim.`.trim();
+        item.textContent = `${[song.category, displaySongNumber(song.number), song.title].filter(Boolean).join(' ')} berhasil dikirim.`;
         successList.append(item);
       });
       document.getElementById('my-song-upload-success-dialog').showModal();
@@ -1589,6 +1822,52 @@
     });
   }
 
+  async function addSongToMySongs(sourceSong, sourceId = sourceSong.id) {
+    const sourceKey = String(sourceId || sourceSong.id || '');
+    const existing = mySongs.find((song) => String(song.id) === sourceKey || String(song.sourceSongId || '') === sourceKey);
+    if (existing) {
+      const message = `${existing.title} sudah ada di Laguku.`;
+      mySongsStatus.textContent = message;
+      setStatus(message);
+      return;
+    }
+    const now = Date.now();
+    const localSong = {
+      id: `local_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      sourceSongId: sourceKey,
+      category: sourceSong.category || '',
+      number: sourceSong.number || '',
+      title: sourceSong.title || '',
+      key: sourceSong.key || '',
+      genre: sourceSong.genre || '',
+      songCreator: sourceSong.songCreator || '',
+      dateCreate: sourceSong.dateCreate || '',
+      tempo: sourceSong.tempo || '',
+      contentHtml: sourceSong.contentHtml || '',
+      images: sourceSong.images && typeof sourceSong.images === 'object' ? JSON.parse(JSON.stringify(sourceSong.images)) : {},
+      storedAt: now,
+      localUpdatedAt: now
+    };
+    try {
+      const db = await openMySongDatabase();
+      await new Promise((resolve, reject) => {
+        const request = db.transaction(MY_SONG_STORE, 'readwrite').objectStore(MY_SONG_STORE).put(localSong);
+        request.onsuccess = resolve;
+        request.onerror = () => reject(request.error || new Error('Penyimpanan gagal.'));
+      });
+      db.close();
+      mySongs.unshift(localSong);
+      renderMySongs();
+      const message = `${[localSong.category, displaySongNumber(localSong.number), localSong.title].filter(Boolean).join(' ')} berhasil ditambahkan ke Laguku.`;
+      mySongsStatus.textContent = message;
+      setStatus(message);
+    } catch (error) {
+      const message = `Gagal menyimpan lagu ke Laguku: ${error.message || 'Penyimpanan lokal tidak tersedia.'}`;
+      mySongsStatus.textContent = message;
+      setStatus(message);
+    }
+  }
+
   async function loadMySongs() {
     try {
       const db = await openMySongDatabase();
@@ -1600,6 +1879,7 @@
       db.close();
       mySongs = records.sort(compareSongs);
       renderMySongs();
+      cacheExistingScheduleImagesOffline();
     } catch (error) {
       mySongsStatus.textContent = 'Penyimpanan lagu lokal tidak tersedia di browser ini.';
       console.warn('Daftar Laguku tidak dapat dimuat:', error);
@@ -1803,7 +2083,7 @@
     statusEl.textContent = 'Menyimpan di perangkat ini…';
     try {
       const category = document.getElementById('my-song-category').value;
-      const number = document.getElementById('my-song-number').value.trim();
+      const number = document.getElementById('my-song-number').value.trim() || createRandomSongNumber();
       const title = document.getElementById('my-song-title').value.trim();
       const stem = safeLocalFilePart(`${category} ${number} ${title}`);
       const images = {};
@@ -1829,6 +2109,7 @@
       }
       const localSong = {
         id: editingMySongId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        sourceSongId: editingMySong?.sourceSongId || '',
         category, number, title,
         key: document.getElementById('my-song-key').value.trim(),
         genre: document.getElementById('my-song-genre').value.trim(),
@@ -2019,7 +2300,8 @@
     populateTransposeKeys();
     transposeControls.hidden = chordModeSelect.value !== 'letters';
     document.getElementById('dialog-category').textContent = `${song.category} · ${(CATEGORIES.find((entry) => entry.code === song.category) || {}).label || ''}`;
-    document.getElementById('dialog-title').textContent = `${song.number ? `${song.number}. ` : ''}${song.title}`;
+    const displayNumber = displaySongNumber(song.number);
+    document.getElementById('dialog-title').textContent = `${displayNumber ? `${displayNumber}. ` : ''}${song.title}`;
     renderPreviewMetadata();
     renderSongContent();
     const readerPosition = document.getElementById('reader-position');
@@ -2522,7 +2804,12 @@
   }
 
   function scoreImageCandidates(file) {
-    const source = typeof file === 'string' ? file : String((file && file.url) || '');
+    if (file && typeof file === 'object' && file.localCacheKey) {
+      const cachedUrl = scheduleImageObjectUrls.get(file.localCacheKey);
+      if (cachedUrl) return [cachedUrl];
+    }
+    const source = typeof file === 'string' ? file : String((file && (file.url || file.dataUrl || file.data)) || '');
+    if (/^data:image\//i.test(source)) return [source];
     const id = scoreImageId(file);
     if (!id) return source ? [source] : [];
     const encodedId = encodeURIComponent(id);

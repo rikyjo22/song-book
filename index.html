@@ -4,19 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#ffffff">
-  <meta name="application-name" content="Lagu Rohani">
+  <meta name="application-name" content="Psallo New Gen">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Lagu Rohani">
+  <meta name="apple-mobile-web-app-title" content="Psallo New Gen">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
-  <title>Lagu Rohani</title>
+  <title>Psallo New Gen</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=theme-form-controls-1">
-  <script defer src="script.js?v=profile-font-size-2"></script>
+  <link rel="stylesheet" href="style.css?v=stacked-song-actions-1">
+  <script defer src="script.js?v=schedule-offline-score-1"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -69,7 +69,7 @@
         <header class="dialog-header"><div class="dialog-heading"><p class="eyebrow">LAGU LOKAL</p><h2 id="my-song-form-title">Detail lagu baru</h2></div><button id="close-my-song-form" class="close-button" type="button" aria-label="Tutup">&#215;</button></header>
         <section class="my-song-form-section"><p class="eyebrow">01 · INFORMASI</p><div class="my-song-fields">
           <label class="schedule-field">KATEGORI<select id="my-song-category" required><option value="">Pilih kategori</option><option value="PS">Psallo (PS)</option><option value="NR">Nyanyian Rohani (NR)</option><option value="SP">Tambahan (SP)</option><option value="ZR">Zangkoor (ZR)</option><option value="KMR">Kaum Muda (KMR)</option><option value="SM">Sekolah Minggu (SM)</option><option value="OTH">Other (OTH)</option></select></label>
-          <label class="schedule-field">NOMOR<input id="my-song-number" required placeholder="Contoh: 1"></label><label class="schedule-field my-song-wide">JUDUL LAGU<input id="my-song-title" required placeholder="Contoh: Kasih dari Sorga"></label>
+          <label class="schedule-field">NOMOR (OPSIONAL)<small class="optional-hint">Boleh dikosongkan jika tidak ada</small><input id="my-song-number" placeholder="Kosongkan untuk nomor acak"></label><label class="schedule-field my-song-wide">JUDUL LAGU<input id="my-song-title" required placeholder="Contoh: Kasih dari Sorga"></label>
           <label class="schedule-field">NADA DASAR<input id="my-song-key" placeholder="C, D♭, Am"></label><label class="schedule-field">JENIS MUSIK<input id="my-song-genre" placeholder="Hymne"></label><label class="schedule-field">PENCIPTA LAGU<input id="my-song-creator"></label><label class="schedule-field">TAHUN<input id="my-song-date" placeholder="1984"></label><label class="schedule-field">TEMPO<input id="my-song-tempo" placeholder="96 atau Allegro"></label>
         </div></section>
         <section class="my-song-form-section"><p class="eyebrow">02 · KONTEN</p><label class="schedule-field">LIRIK DAN CHORD<span class="my-song-editor-hint">Penanda bagian seperti [Intro], [Bait 1], [Reff], atau [Bridge] akan disorot otomatis.</span><span class="my-song-content-wrap"><pre id="my-song-highlight" class="my-song-highlight" aria-hidden="true"></pre><textarea id="my-song-content" required spellcheck="false" wrap="off" aria-label="Lirik dan chord" placeholder="[Intro]&#10;G   D   Em&#10;&#10;[Bait 1]&#10;Lirik lagu"></textarea></span></label></section>
@@ -151,7 +151,7 @@
       <div class="edit-dialog-heading"><div><p class="eyebrow">SALINAN LOKAL JADWAL</p><h2 id="schedule-edit-title">Edit lagu jadwal</h2></div></div>
       <div class="schedule-edit-fields">
         <label class="schedule-field">JUDUL<input name="title" type="text" maxlength="120" required></label>
-        <label class="schedule-field">NOMOR<input name="number" type="text" maxlength="30"></label>
+        <label class="schedule-field">NOMOR (OPSIONAL)<small class="optional-hint">Boleh dikosongkan jika tidak ada</small><input name="number" type="text" maxlength="30"></label>
         <label class="schedule-field">NADA DASAR<input name="key" type="text" maxlength="20"></label>
         <label class="schedule-field">JENIS MUSIK<input name="genre" type="text" maxlength="60"></label>
         <label class="schedule-field">TEMPO<input name="tempo" type="text" maxlength="20"></label>
