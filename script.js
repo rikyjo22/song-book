@@ -2,7 +2,7 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbyrCARZowsGsudD51ks3ylfCSB11Q2v_DJP95oBKaUweaZbELOEI8wi4jzfE4WbW11XSw/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbwlxbL5JgMqGv6zrF9RbqaF3XQJ9gWq8NW-QB9PPtUTFiC5O6ySXX2USVsSNSyK8jNe5w/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const ACTIVE_SCHEDULE_KEY = 'song-book:active-worship-schedule:v1';
