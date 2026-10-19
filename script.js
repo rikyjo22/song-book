@@ -1158,7 +1158,7 @@
       songCreator: song.songCreator || '',
       dateCreate: song.dateCreate || '',
       tempo: song.tempo || '',
-      contentHtml: song.contentHtml || '',
+      contentHtml: normalizeSongContentHtml(song.contentHtml),
       images: images && typeof images === 'object' ? images : {},
       overrides: {}
     };
@@ -1361,6 +1361,11 @@
       const body = escapeText(section.lines.join('\n'));
       return `<section class="song-section" data-section="${label}"><h3 class="song-section-title">${label}</h3><div class="song-section-body">${body}</div></section>`;
     }).join('')}</div>`;
+  }
+
+  function normalizeSongContentHtml(contentHtml) {
+    const editableText = htmlToEditableText(contentHtml);
+    return editableText.trim() ? editableTextToHtml(editableText) : '';
   }
 
   function saveScheduleSongEdit(event) {
@@ -1723,7 +1728,7 @@
       songCreator: sourceSong.songCreator || '',
       dateCreate: sourceSong.dateCreate || '',
       tempo: sourceSong.tempo || '',
-      contentHtml: sourceSong.contentHtml || '',
+      contentHtml: normalizeSongContentHtml(sourceSong.contentHtml),
       images: sourceSong.images && typeof sourceSong.images === 'object' ? JSON.parse(JSON.stringify(sourceSong.images)) : {},
       storedAt: now,
       localUpdatedAt: now
@@ -2161,10 +2166,7 @@
   }
 
   function previewSongFragment(contentHtml) {
-    const parsed = new DOMParser().parseFromString(String(contentHtml || ''), 'text/html');
-    const isStructured = Boolean(parsed.querySelector('.song-content, .song-section, .song-section-body'));
-    const previewHtml = isStructured ? contentHtml : editableTextToHtml(htmlToEditableText(contentHtml));
-    return safeSongFragment(previewHtml);
+    return safeSongFragment(normalizeSongContentHtml(contentHtml));
   }
 
   function openSong(song, queue = songs, queueIndex, showPreview = true) {
