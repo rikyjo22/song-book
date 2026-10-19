@@ -2,11 +2,18 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbzHIplbDmgbrnMoZXBQNKLVmNQifdNhbUi7j66LTAHSGkRBX3WaBPo4P7y63KP2goxkjw/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbyrCARZowsGsudD51ks3ylfCSB11Q2v_DJP95oBKaUweaZbELOEI8wi4jzfE4WbW11XSw/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
+  const ACTIVE_SCHEDULE_KEY = 'song-book:active-worship-schedule:v1';
+  const ACTIVE_SCHEDULE_SHARE_KEY = 'song-book:active-schedule-share:v1';
   const SCHEDULE_INTRO_CACHE_KEY = 'song-book:schedule-intros:v1';
   const INSTRUMENT_PROFILE_KEY = 'song-book:instrument-profile:v1';
+  const PROFILE_USER_NAME_KEY = 'song-book:profile-user-name:v1';
+  const THEME_MODE_KEY = 'song-book:theme-mode:v1';
+  const THEME_CHOICE_KEY = 'song-book:theme-choice:v1';
+  const FONT_STYLE_KEY = 'song-book:font-style:v1';
+  const FONT_SIZE_KEY = 'song-book:font-size:v1';
   const CATEGORIES = [
     { code: 'ALL', label: 'Semua' }, { code: 'PS', label: 'Psallo' },
     { code: 'NR', label: 'Nyanyian Rohani' }, { code: 'SP', label: 'Tambahan' },
@@ -18,19 +25,39 @@
   const count = document.getElementById('song-count');
   const syncStatus = document.getElementById('sync-status');
   const refreshButton = document.getElementById('refresh-button');
-  const instrumentFilterDialog = document.getElementById('instrument-filter-dialog');
+  const instrumentProfilePanel = document.getElementById('instrument-profile-panel');
   const instrumentFilterSelect = document.getElementById('instrument-filter-select');
+  const profileUserNameInput = document.getElementById('profile-user-name');
   const instrumentFilterStatus = document.getElementById('instrument-filter-status');
   const search = document.getElementById('search-input');
+  const mySongsSearch = document.getElementById('my-songs-search');
+  const mySongsCategoryFilter = document.getElementById('my-songs-category-filter');
+  const mySongsList = document.getElementById('my-songs-list');
+  const mySongsStatus = document.getElementById('my-songs-status');
+  const mySongsCount = document.getElementById('my-songs-count');
+  const uploadMySongsButton = document.getElementById('upload-my-songs');
+  const cancelMySongUploadButton = document.getElementById('cancel-my-song-upload');
+  const mySongUploadAccessDialog = document.getElementById('my-song-upload-access-dialog');
+  const mySongUploadAccessForm = document.getElementById('my-song-upload-access-form');
+  const mySongUploadAccessCode = document.getElementById('my-song-upload-access-code');
+  let isMySongUploadMode = false;
+  const selectedMySongUploadIds = new Set();
+  const mySongDialog = document.getElementById('my-song-dialog');
+  const mySongForm = document.getElementById('my-song-form');
+  const mySongInstrumentList = document.getElementById('my-song-instruments');
+  const mySongContentInput = document.getElementById('my-song-content');
+  const mySongHighlight = document.getElementById('my-song-highlight');
+  const MY_SONG_DB = 'song-book:local-library:v1';
+  const MY_SONG_STORE = 'songs';
+  const deleteMySongDialog = document.getElementById('delete-my-song-dialog');
+  let editingMySongId = '';
+  let editingMySong = null;
+  let pendingMySongDeleteId = '';
   const filters = document.getElementById('category-filters');
   const dialog = document.getElementById('song-dialog');
   const preview = document.getElementById('song-preview');
   const scheduleList = document.getElementById('schedule-list');
   const scheduleStatus = document.getElementById('schedule-status');
-  const scheduleAddBar = document.getElementById('schedule-add-bar');
-  const targetScheduleSelect = document.getElementById('target-schedule-select');
-  const collectionResults = document.getElementById('collection-results');
-  const collapseCollectionButton = document.getElementById('collapse-collection');
   const scheduleEditDialog = document.getElementById('schedule-edit-dialog');
   const scheduleEditForm = document.getElementById('schedule-edit-form');
   const scheduleContentInput = document.getElementById('schedule-content-input');
@@ -66,8 +93,10 @@
   const scoreNextGeneralSongButton = document.getElementById('score-next-general-song-button');
   const scoreNextGeneralSongLabel = document.getElementById('score-next-general-song-label');
   let songs = [];
+  let mySongs = [];
   let activeCategory = 'ALL';
   let preferredInstrument = readInstrumentProfile();
+  let preferredUserName = readProfileUserName();
   let currentSongIndex = -1;
   let currentPreviewSongs = [];
   let currentPreviewSong = null;
@@ -77,13 +106,13 @@
   let selectedPreviewKey = 'C';
   let callbackCounter = 0;
   let instrumentOptionsLoaded = false;
+  let mySongInstrumentNames = [];
   let cacheAvailable = false;
   let isLoadingSongs = false;
   let schedules = [];
   let activeScheduleId = '';
   let draggedRow = null;
   let dragPointerId = null;
-  let isCollectionCollapsed = false;
   let editingEntry = null;
   let viewedScheduleId = '';
   let scheduleIntroRequestId = 0;
@@ -106,28 +135,47 @@
   const shareDialog = document.getElementById('schedule-share-dialog');
   const pullDialog = document.getElementById('schedule-pull-dialog');
   let shareTimer = 0;
-  let shareExpiresAt = 0;
+  let activeScheduleShare = readActiveScheduleShare();
+  let shareExpiresAt = activeScheduleShare ? activeScheduleShare.expiresAt : 0;
 
   const instrumentProfileButton = document.getElementById('instrument-filter-open');
-  instrumentProfileButton.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
-  instrumentProfileButton.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
-  document.addEventListener('click', (event) => {
-    const trigger = event.target.closest('#instrument-filter-open');
-    if (!trigger) return;
-    event.preventDefault();
-    prepareInstrumentProfileOptions();
-    openInstrumentFilterDialog();
-  }, true);
-  document.getElementById('close-instrument-filter').addEventListener('click', closeInstrumentFilterDialog);
+  const profileSaveButton = document.getElementById('apply-instrument-filter');
+  const themeModeSelect = document.getElementById('theme-mode-select');
+  const themeChoiceSelect = document.getElementById('theme-choice-select');
+  const fontStyleSelect = document.getElementById('font-style-select');
+  const fontSizeSelect = document.getElementById('font-size-select');
+  const fontSizeValue = document.getElementById('font-size-value');
+  const themeChoiceField = document.getElementById('theme-choice-field');
+  let profileSaveFeedbackTimer = 0;
+  const fontSizeBaselines = new WeakMap();
+  initializeThemePreferences();
+  themeModeSelect.addEventListener('change', applyThemePreferences);
+  themeChoiceSelect.addEventListener('change', applyThemePreferences);
+  fontStyleSelect.addEventListener('change', applyThemePreferences);
+  fontSizeSelect.addEventListener('change', applyThemePreferences);
+  instrumentProfileButton.title = preferredInstrument ? `Profile: ${preferredInstrument}` : 'Profile';
   document.getElementById('refresh-instrument-filter').addEventListener('click', (event) => {
     loadInstrumentOptions(event.currentTarget);
   });
-  instrumentFilterDialog.addEventListener('click', (event) => {
-    if (event.target === instrumentFilterDialog) closeInstrumentFilterDialog();
-  });
   document.getElementById('apply-instrument-filter').addEventListener('click', () => {
-    saveInstrumentProfile(instrumentFilterSelect.value);
-    closeInstrumentFilterDialog();
+    const userName = profileUserNameInput.value.trim();
+    if (!userName) {
+      instrumentFilterStatus.textContent = 'Masukkan nama pengguna untuk menyimpan Profile.';
+      profileUserNameInput.focus();
+      return;
+    }
+    if (!saveInstrumentProfile(instrumentFilterSelect.value, userName)) {
+      instrumentFilterStatus.textContent = 'Profile tidak dapat disimpan di perangkat ini.';
+      return;
+    }
+    window.clearTimeout(profileSaveFeedbackTimer);
+    profileSaveButton.textContent = 'Tersimpan ✓';
+    profileSaveButton.classList.add('is-saved');
+    instrumentFilterStatus.textContent = 'Profile berhasil disimpan di perangkat ini.';
+    profileSaveFeedbackTimer = window.setTimeout(() => {
+      profileSaveButton.textContent = 'Simpan Profile';
+      profileSaveButton.classList.remove('is-saved');
+    }, 2500);
   });
   function setStatus(message) { status.textContent = message; }
   function setSyncStatus(message) { syncStatus.textContent = message; }
@@ -141,6 +189,72 @@
     try { return String(localStorage.getItem(INSTRUMENT_PROFILE_KEY) || '').trim(); }
     catch (error) { return ''; }
   }
+  function readProfileUserName() {
+    try { return String(localStorage.getItem(PROFILE_USER_NAME_KEY) || '').trim(); }
+    catch (error) { return ''; }
+  }
+  function initializeThemePreferences() {
+    let mode = 'light';
+    let theme = 'ocean';
+    let fontStyle = 'dm-sans';
+    let fontSize = '100';
+    try {
+      mode = localStorage.getItem(THEME_MODE_KEY) || mode;
+      theme = localStorage.getItem(THEME_CHOICE_KEY) || theme;
+      fontStyle = localStorage.getItem(FONT_STYLE_KEY) || fontStyle;
+      fontSize = localStorage.getItem(FONT_SIZE_KEY) || fontSize;
+    } catch (error) { /* Keep the default theme when storage is unavailable. */ }
+    if (!['light', 'dark', 'other'].includes(mode)) mode = 'light';
+    if (!['ocean', 'forest', 'sunset', 'rose', 'lavender'].includes(theme)) theme = 'ocean';
+    if (!['dm-sans', 'arial', 'georgia', 'trebuchet', 'verdana'].includes(fontStyle)) fontStyle = 'dm-sans';
+    if (!/^\d+$/.test(String(fontSize)) || Number(fontSize) < 100 || Number(fontSize) > 130) fontSize = '100';
+    themeModeSelect.value = mode;
+    themeChoiceSelect.value = theme;
+    fontStyleSelect.value = fontStyle;
+    fontSizeSelect.value = fontSize;
+    applyThemePreferences();
+  }
+  function applyThemePreferences() {
+    const mode = ['light', 'dark', 'other'].includes(themeModeSelect.value) ? themeModeSelect.value : 'light';
+    const theme = ['ocean', 'forest', 'sunset', 'rose', 'lavender'].includes(themeChoiceSelect.value) ? themeChoiceSelect.value : 'ocean';
+    const fontStyle = ['dm-sans', 'arial', 'georgia', 'trebuchet', 'verdana'].includes(fontStyleSelect.value) ? fontStyleSelect.value : 'dm-sans';
+    const fontSize = Math.max(100, Math.min(130, Number(fontSizeSelect.value) || 100));
+    const activeTheme = mode === 'other' ? theme : mode;
+    document.documentElement.dataset.theme = activeTheme;
+    document.documentElement.dataset.fontStyle = fontStyle;
+    document.documentElement.dataset.fontSize = fontSize;
+    fontSizeValue.value = `${fontSize}%`;
+    fontSizeValue.textContent = `${fontSize}%`;
+    fontSizeSelect.setAttribute('aria-valuetext', `${fontSize}%`);
+    applyUserFontScale(fontSize);
+    themeChoiceField.hidden = mode !== 'other';
+    try {
+      localStorage.setItem(THEME_MODE_KEY, mode);
+      localStorage.setItem(THEME_CHOICE_KEY, theme);
+      localStorage.setItem(FONT_STYLE_KEY, fontStyle);
+      localStorage.setItem(FONT_SIZE_KEY, fontSize);
+    } catch (error) { /* Theme still applies for this page view. */ }
+  }
+  function applyUserFontScale(percent) {
+    const multiplier = Number(percent) / 100;
+    const excluded = 'pre, code, .song-section-body, .song-section-body *, .my-song-highlight, .schedule-content-highlight, #my-song-content, #schedule-content-input';
+    document.querySelectorAll('body *').forEach((element) => {
+      if (element.matches(excluded) || element.closest(excluded)) return;
+      const hasDirectText = Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+      const isTextControl = element.matches('button,select,textarea,input:not([type="checkbox"]):not([type="radio"]):not([type="file"])');
+      if (!hasDirectText && !isTextControl) return;
+      if (!fontSizeBaselines.has(element)) {
+        const size = Number.parseFloat(getComputedStyle(element).fontSize);
+        if (Number.isFinite(size) && size > 0) fontSizeBaselines.set(element, size);
+      }
+      const baseline = fontSizeBaselines.get(element);
+      if (baseline) element.style.fontSize = `${baseline * multiplier}px`;
+    });
+  }
+  const fontSizeObserver = new MutationObserver(() => {
+    window.requestAnimationFrame(() => applyUserFontScale(Number(fontSizeSelect.value) || 100));
+  });
+  fontSizeObserver.observe(document.body, { childList: true, subtree: true });
   function escapeText(value) {
     const span = document.createElement('span');
     span.textContent = String(value == null ? '' : value);
@@ -231,7 +345,7 @@
           instrumentFilterStatus.textContent = 'Daftar instrumen gagal diperbarui. Periksa koneksi lalu coba lagi.';
           return;
         }
-        instrumentFilterSelect.replaceChildren(new Option('Partitur', ''));
+        instrumentFilterSelect.replaceChildren(new Option('Belum memilih', ''));
         const localNames = new Set(['Flute', 'Clarinet', 'Violin', 'Saxophone', 'Alto Sax', 'Trumpet']);
         songs.forEach((song) => Object.keys(song.images || {}).forEach((name) => localNames.add(name)));
         if (preferredInstrument) localNames.add(preferredInstrument);
@@ -242,7 +356,7 @@
           : 'Daftar online belum tersedia; pilihan lokal ditampilkan sementara.';
         return;
       }
-      instrumentFilterSelect.replaceChildren(new Option('Partitur', ''));
+      instrumentFilterSelect.replaceChildren(new Option('Belum memilih', ''));
       (Array.isArray(result.instruments) ? result.instruments : []).forEach((name) => {
         instrumentFilterSelect.add(new Option(name, name));
       });
@@ -269,38 +383,13 @@
   }
 
   function prepareInstrumentProfileOptions() {
+    profileUserNameInput.value = preferredUserName;
     if (!instrumentOptionsLoaded) {
-      instrumentFilterSelect.replaceChildren(new Option('Partitur', ''));
+      instrumentFilterSelect.replaceChildren(new Option('Belum memilih', ''));
       if (preferredInstrument) instrumentFilterSelect.add(new Option(preferredInstrument, preferredInstrument));
       instrumentFilterStatus.textContent = 'Profil tersimpan di perangkat ini. Tekan perbarui untuk mengambil daftar terbaru.';
     }
     instrumentFilterSelect.value = preferredInstrument;
-  }
-
-  function openInstrumentFilterDialog() {
-    if (instrumentFilterDialog.open) return;
-    try {
-      if (typeof instrumentFilterDialog.showModal === 'function') {
-        instrumentFilterDialog.showModal();
-        return;
-      }
-    } catch (error) {
-      console.warn('Dialog profil instrumen memakai mode kompatibilitas:', error);
-    }
-    instrumentFilterDialog.classList.add('dialog-fallback-open');
-    instrumentFilterDialog.setAttribute('open', '');
-  }
-
-  function closeInstrumentFilterDialog() {
-    try {
-      if (typeof instrumentFilterDialog.close === 'function' && instrumentFilterDialog.open) {
-        instrumentFilterDialog.close();
-      }
-    } catch (error) {
-      console.warn('Dialog profil instrumen ditutup dengan mode kompatibilitas:', error);
-    }
-    instrumentFilterDialog.removeAttribute('open');
-    instrumentFilterDialog.classList.remove('dialog-fallback-open');
   }
 
   function loadCachedSongs() {
@@ -357,6 +446,21 @@
     catch (error) { console.warn('Cache intro jadwal tidak dapat disimpan:', error); }
   }
 
+  function readActiveScheduleShare() {
+    try {
+      const share = JSON.parse(localStorage.getItem(ACTIVE_SCHEDULE_SHARE_KEY) || 'null');
+      if (!share || !/^[A-Z0-9]{3}$/.test(String(share.code || '')) || !share.scheduleId || !Number.isFinite(Number(share.expiresAt))) return null;
+      return { scheduleId: String(share.scheduleId), code: String(share.code), expiresAt: Number(share.expiresAt) };
+    } catch (error) { return null; }
+  }
+
+  function persistActiveScheduleShare() {
+    try {
+      if (activeScheduleShare) localStorage.setItem(ACTIVE_SCHEDULE_SHARE_KEY, JSON.stringify(activeScheduleShare));
+      else localStorage.removeItem(ACTIVE_SCHEDULE_SHARE_KEY);
+    } catch (error) { console.warn('Status berbagi tidak dapat disimpan di perangkat ini:', error); }
+  }
+
   function loadSchedules() {
     try {
       const saved = JSON.parse(localStorage.getItem(SCHEDULE_KEY) || '[]');
@@ -368,6 +472,7 @@
         sharedIntro: item.sharedIntro && typeof item.sharedIntro === 'object' ? item.sharedIntro : null,
         songs: Array.isArray(item.songs) ? item.songs.filter((song) => song && typeof song.id === 'string').map((song, index) => ({ ...song, entryId: String(song.entryId || `entry_legacy_${item.id}_${index}`), contentHtml: String(song.contentHtml || ''), overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : []
       })) : [];
+      activeScheduleId = localStorage.getItem(ACTIVE_SCHEDULE_KEY) || '';
     } catch (error) {
       schedules = [];
     }
@@ -376,6 +481,8 @@
   function saveSchedules() {
     try {
       localStorage.setItem(SCHEDULE_KEY, JSON.stringify(schedules));
+      if (activeScheduleId && schedules.some((item) => item.id === activeScheduleId)) localStorage.setItem(ACTIVE_SCHEDULE_KEY, activeScheduleId);
+      else localStorage.removeItem(ACTIVE_SCHEDULE_KEY);
       scheduleStatus.textContent = schedules.length ? `${schedules.length} jadwal tersimpan di perangkat ini.` : 'Jadwal tersimpan di perangkat ini.';
       return true;
     } catch (error) {
@@ -416,7 +523,7 @@
     });
   }
 
-  function postScheduleApi(action, data) {
+  function postScheduleApi(action, data, timeoutMs = 25000) {
     return new Promise((resolve, reject) => {
       const nonce = `share_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const frame = document.createElement('iframe');
@@ -431,7 +538,7 @@
       input.name = 'payload';
       input.value = JSON.stringify({ action, requestNonce: nonce, ...data });
       form.append(input);
-      const timeout = window.setTimeout(() => finish(new Error('Koneksi ke server habis.')), 25000);
+      const timeout = window.setTimeout(() => finish(new Error('Koneksi ke server habis.')), timeoutMs);
       function onMessage(event) {
         const reply = event.data;
         if (!reply || reply.nonce !== nonce) return;
@@ -481,23 +588,63 @@
   }
 
   function updateShareCountdown() {
+    if (!activeScheduleShare) return;
+    shareExpiresAt = activeScheduleShare.expiresAt;
     const remaining = Math.max(0, Math.ceil((shareExpiresAt - Date.now()) / 1000));
-    document.getElementById('share-countdown').textContent = `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`;
+    const countdown = formatShareCountdown(remaining);
+    document.getElementById('share-countdown').textContent = countdown;
+    const cardCountdown = scheduleList.querySelector(`[data-schedule-share-countdown="${CSS.escape(activeScheduleShare.scheduleId)}"]`);
+    if (cardCountdown) cardCountdown.textContent = countdown;
+    renderShareButtonState();
     if (!remaining) stopSharing(true);
+  }
+
+  function formatShareCountdown(totalSeconds) {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  function renderShareButtonState() {
+    const button = document.getElementById('share-schedule-open');
+    const isActive = Boolean(activeScheduleShare && activeScheduleShare.expiresAt > Date.now());
+    button.textContent = isActive ? `Berhenti bagikan (${activeScheduleShare.code})` : 'Bagikan jadwal';
+    button.classList.toggle('is-sharing', isActive);
+    button.setAttribute('aria-label', isActive ? `Berhenti membagikan jadwal dengan kode ${activeScheduleShare.code}` : 'Bagikan jadwal');
+    document.getElementById('share-schedule-submit').disabled = isActive || !schedules.length;
   }
 
   async function stopSharing(expired) {
     window.clearInterval(shareTimer);
     shareTimer = 0;
-    const code = document.getElementById('share-code').textContent;
+    const headerButton = document.getElementById('share-schedule-open');
+    headerButton.disabled = true;
+    const code = activeScheduleShare?.code || document.getElementById('share-code').textContent;
     if (code) {
-      try { await callScheduleApi('stopScheduleShare', { code }); } catch (error) { console.warn(error); }
+      try { await callScheduleApi('stopScheduleShare', { code }); }
+      catch (error) {
+        console.warn(error);
+        if (!expired) {
+          document.getElementById('share-status').textContent = `Gagal menghentikan berbagi: ${error.message}`;
+          headerButton.disabled = false;
+          shareTimer = window.setInterval(updateShareCountdown, 1000);
+          return;
+        }
+      }
     }
+    activeScheduleShare = null;
+    shareExpiresAt = 0;
+    persistActiveScheduleShare();
+    renderShareButtonState();
+    renderSchedules();
+    headerButton.disabled = false;
     document.getElementById('share-result').hidden = true;
     document.getElementById('share-status').textContent = expired ? 'Waktu berbagi habis. Data sementara telah dihapus.' : 'Berbagi dihentikan dan data sementara telah dihapus.';
   }
 
   async function shareSelectedSchedule() {
+    if (activeScheduleShare && activeScheduleShare.expiresAt > Date.now()) return;
     const schedule = schedules.find((item) => item.id === document.getElementById('share-schedule-select').value);
     if (!schedule) return;
     const button = document.getElementById('share-schedule-submit');
@@ -511,17 +658,47 @@
         scheduleIntros[schedule.id] = intro;
         persistScheduleIntroCache();
       }
-      const result = await postScheduleApi('shareSchedule', { schedule: { ...schedule, intro: intro || null } });
+      const sharedByName = String(profileUserNameInput.value || preferredUserName || '').trim();
+      if (!sharedByName) {
+        document.getElementById('share-status').textContent = 'Simpan nama pengguna di Profile sebelum membagikan jadwal.';
+        return;
+      }
+      const durationMinutes = Number(document.getElementById('share-duration-select').value) || 15;
+      const sharedSongs = (schedule.songs || []).map((entry) => String(entry.id || '').startsWith('local_')
+        ? { ...entry, localSourceName: sharedByName }
+        : entry);
+      const result = await postScheduleApi('shareSchedule', { sharedByName, durationMinutes, schedule: { ...schedule, sharedByName, songs: sharedSongs, intro: intro || null } });
       document.getElementById('share-code').textContent = result.code;
       document.getElementById('share-result').hidden = false;
       document.getElementById('share-status').textContent = 'Bagikan kode ini kepada penerima.';
-      shareExpiresAt = Number(result.expiresAt);
+      activeScheduleShare = { scheduleId: schedule.id, code: result.code, expiresAt: Number(result.expiresAt) };
+      shareExpiresAt = activeScheduleShare.expiresAt;
+      persistActiveScheduleShare();
       window.clearInterval(shareTimer);
+      document.getElementById('share-schedule-submit').disabled = true;
+      renderShareButtonState();
+      renderSchedules();
       updateShareCountdown();
       shareTimer = window.setInterval(updateShareCountdown, 1000);
     } catch (error) {
       document.getElementById('share-status').textContent = error.message;
-    } finally { button.disabled = false; }
+    } finally { button.disabled = Boolean(activeScheduleShare && activeScheduleShare.expiresAt > Date.now()); }
+  }
+
+  function restoreActiveScheduleShare() {
+    if (!activeScheduleShare) {
+      renderShareButtonState();
+      return;
+    }
+    if (activeScheduleShare.expiresAt <= Date.now()) {
+      stopSharing(true);
+      return;
+    }
+    document.getElementById('share-code').textContent = activeScheduleShare.code;
+    document.getElementById('share-schedule-submit').disabled = true;
+    renderShareButtonState();
+    updateShareCountdown();
+    shareTimer = window.setInterval(updateShareCountdown, 1000);
   }
 
   async function pullSharedSchedule() {
@@ -534,7 +711,10 @@
     try {
       const result = await callScheduleApi('pullSchedule', { code });
       const received = result.schedule;
-      const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${received.title || 'Jadwal ibadah'} (salinan)`, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
+      const rawSharerName = String(received.sharedByName || '').trim() || 'Pengguna';
+      const sharerName = `${rawSharerName.charAt(0).toLocaleUpperCase('id')}${rawSharerName.slice(1)}`;
+      const sourceTitle = String(received.title || 'Jadwal ibadah').replace(/\s*\(salinan(?:\s+dari[^)]*)?\)\s*$/i, '').trim() || 'Jadwal ibadah';
+      const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
       schedules.unshift(imported);
       activeScheduleId = imported.id;
       saveSchedules();
@@ -548,6 +728,7 @@
   }
 
   function renderSchedules() {
+    renderShareButtonState();
     renderScheduleTargets();
     scheduleList.replaceChildren();
     if (!schedules.length) {
@@ -562,14 +743,18 @@
     const fragment = document.createDocumentFragment();
     schedules.forEach((schedule) => {
       const card = document.createElement('article');
-      card.className = 'schedule-card';
+      card.className = `schedule-card${schedule.id === activeScheduleId ? ' is-active-schedule' : ''}`;
       card.dataset.scheduleId = schedule.id;
+      const shareCountdown = activeScheduleShare && activeScheduleShare.scheduleId === schedule.id && activeScheduleShare.expiresAt > Date.now()
+        ? `<div class="schedule-share-status"><span>Jadwal dibagikan · kode ${escapeText(activeScheduleShare.code)}</span><strong data-schedule-share-countdown="${escapeText(schedule.id)}">${formatShareCountdown(Math.max(0, Math.ceil((activeScheduleShare.expiresAt - Date.now()) / 1000)))}</strong></div>`
+        : '';
       card.innerHTML = `
+        <label class="active-schedule-choice"><input type="radio" name="active-worship-schedule" value="${escapeText(schedule.id)}" ${schedule.id === activeScheduleId ? 'checked' : ''}><span>${schedule.id === activeScheduleId ? 'Aktif' : 'Tidak Aktif'}</span></label>
         <div class="schedule-card-header">
           <label class="schedule-field">NAMA JADWAL<input class="schedule-title-input" data-field="title" type="text" maxlength="80" value="${escapeText(schedule.title)}" placeholder="Contoh: Ibadah Minggu Pagi"></label>
           <label class="schedule-field">TANGGAL<span class="schedule-date-control"><span class="schedule-date-display">${escapeText(formatWorshipDate(schedule.date) || 'Pilih tanggal')}</span><input data-field="date" type="date" value="${escapeText(schedule.date)}" aria-label="Tanggal ibadah"></span></label>
           <button class="schedule-view-button" type="button" data-action="view-schedule">Lihat jadwal</button>
-        </div>`;
+        </div>${shareCountdown}`;
       fragment.append(card);
     });
     scheduleList.append(fragment);
@@ -594,10 +779,12 @@
     const list = document.getElementById('schedule-view-list');
     const rows = schedule.songs.map((entry, index) => {
       const song = getEffectiveScheduledSong(entry);
-      return `<li class="schedule-song-row${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
+      const sourceClass = String(entry.id || '').startsWith('local_') ? ' is-local-song' : ' is-database-song';
+      const localAttribution = entry.localSourceName ? `<span class="schedule-song-attribution">Diambil dari data lokal “${escapeText(entry.localSourceName)}”</span>` : '';
+      return `<li class="schedule-song-row${sourceClass}${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
         <button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button>
         <span class="schedule-song-order">${index + 1}</span>
-        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} - ${escapeText(song.title || entry.title || '')}</span><span class="schedule-song-compact-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} ${escapeText(song.title || entry.title || '')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span></button>
+        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} - ${escapeText(song.title || entry.title || '')}</span><span class="schedule-song-compact-name">${escapeText(song.category || entry.category || '')} ${escapeText(song.number || entry.number || '')} ${escapeText(song.title || entry.title || '')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span>${localAttribution}</button>
         <span class="schedule-song-actions">
           <label class="pre-worship-toggle"><input type="checkbox" data-action="toggle-pre-worship" data-entry-id="${escapeText(entry.entryId)}" ${entry.preWorship ? 'checked' : ''}><span>Pra-ibadah</span></label>
           <button type="button" data-action="move-up" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke atas" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
@@ -827,17 +1014,11 @@
   }
 
   function renderScheduleTargets() {
-    scheduleAddBar.hidden = schedules.length === 0;
-    const previousId = activeScheduleId;
-    targetScheduleSelect.replaceChildren();
-    schedules.forEach((schedule) => {
-      const option = document.createElement('option');
-      option.value = schedule.id;
-      option.textContent = schedule.title || 'Jadwal tanpa nama';
-      targetScheduleSelect.append(option);
-    });
-    if (!schedules.some((schedule) => schedule.id === previousId)) activeScheduleId = schedules[0] ? schedules[0].id : '';
-    targetScheduleSelect.value = activeScheduleId;
+    if (!schedules.some((schedule) => schedule.id === activeScheduleId)) activeScheduleId = schedules[0] ? schedules[0].id : '';
+    try {
+      if (activeScheduleId) localStorage.setItem(ACTIVE_SCHEDULE_KEY, activeScheduleId);
+      else localStorage.removeItem(ACTIVE_SCHEDULE_KEY);
+    } catch (error) { console.warn('Jadwal aktif tidak dapat disimpan:', error); }
   }
 
   function addSchedule() {
@@ -862,7 +1043,7 @@
 
   function addSongToSchedule(songId) {
     const schedule = schedules.find((item) => item.id === activeScheduleId);
-    const song = songs.find((item) => item.id === songId);
+    const song = songs.find((item) => item.id === songId) || mySongs.find((item) => item.id === songId);
     if (!schedule || !song) return;
     schedule.songs.push(createScheduledEntry(song));
     schedule.isOpen = true;
@@ -879,6 +1060,29 @@
     addSongToSchedule(addButton.dataset.addSong);
   }
 
+  function handleMySongListClick(event) {
+    const button = event.target.closest('button[data-my-song-action]');
+    if (!button) return;
+    const song = mySongs.find((item) => item.id === button.dataset.songId);
+    if (!song) return;
+    const action = button.dataset.mySongAction;
+    if (action === 'edit') openMySongEditor(song);
+    if (action === 'delete') confirmMySongDeletion(song);
+    if (action === 'add') addSongToSchedule(song.id);
+  }
+
+  function handleActiveScheduleChange(event) {
+    const radio = event.target.closest('input[name="active-worship-schedule"]');
+    if (!radio || !schedules.some((item) => item.id === radio.value)) return;
+    activeScheduleId = radio.value;
+    saveSchedules();
+    renderSchedules();
+    renderList();
+    renderMySongs();
+    const selected = schedules.find((item) => item.id === activeScheduleId);
+    scheduleStatus.textContent = `Jadwal aktif: ${selected.title || 'Jadwal tanpa nama'}.`;
+  }
+
   function createScheduledEntry(song) {
     return {
       entryId: `entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -892,7 +1096,7 @@
       dateCreate: song.dateCreate || '',
       tempo: song.tempo || '',
       contentHtml: song.contentHtml || '',
-      images: song.images && typeof song.images === 'object' ? song.images : {},
+      images: song.id && song.id.startsWith('local_') ? {} : (song.images && typeof song.images === 'object' ? song.images : {}),
       overrides: {}
     };
   }
@@ -900,8 +1104,8 @@
   function getEffectiveScheduledSong(entry) {
     // Entries created before local snapshots only contain a spreadsheet song ID.
     // Use the cached library record as their base, then apply the schedule copy.
-    const sourceSong = songs.find((song) => song.id === entry.id) || {};
-    return { ...sourceSong, ...entry, ...(entry.overrides || {}) };
+    const sourceSong = songs.find((song) => song.id === entry.id) || mySongs.find((song) => song.id === entry.id) || {};
+    return { ...sourceSong, ...entry, ...(entry.overrides || {}), ...(String(entry.id).startsWith('local_') ? { images: sourceSong.images || {} } : {}) };
   }
 
   function handleScheduleClick(event) {
@@ -1117,17 +1321,7 @@
     if (scheduleViewDialog.open) renderScheduleView(viewedScheduleId);
   }
 
-  function setCollectionCollapsed(collapsed) {
-    if (collapsed && search.value.trim()) return;
-    isCollectionCollapsed = collapsed;
-    collectionResults.hidden = collapsed;
-    collapseCollectionButton.setAttribute('aria-expanded', String(!collapsed));
-    collapseCollectionButton.title = collapsed ? 'Tampilkan koleksi' : 'Ciutkan koleksi';
-    collapseCollectionButton.textContent = collapsed ? '\u2304' : '\u2303';
-  }
-
   function handleSearchInput() {
-    if (search.value.trim()) setCollectionCollapsed(false);
     renderList();
   }
   function handleScheduleInput(event) {
@@ -1176,6 +1370,7 @@
       if (!query) return true;
       return normalize([song.category, song.number, song.title, song.key, song.genre, song.songCreator, song.dateCreate, song.tempo, stripHtml(song.contentHtml)].join(' ')).includes(query);
     });
+    renderMySongs();
     songList.replaceChildren();
     if (!songs.length) {
       setStatus('Belum ada lagu di database. Tambahkan lagu melalui Song Manager.');
@@ -1192,7 +1387,8 @@
       card.className = 'song-card';
       const number = escapeText(song.number);
       const categoryLabel = CATEGORIES.find((entry) => entry.code === song.category);
-      const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo)].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
+      const showUploader = song.uploader && String(song.uploader).trim().toLowerCase() !== 'admin';
+      const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo), showUploader ? `Uploader: ${song.uploader}` : ''].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
       const openButton = document.createElement('button');
       openButton.type = 'button';
       openButton.className = 'song-card-main';
@@ -1214,6 +1410,569 @@
     });
     songList.append(fragment);
   }
+
+  function renderMySongs() {
+    const query = normalize(mySongsSearch.value.trim());
+    const selectedCategory = mySongsCategoryFilter.value || 'ALL';
+    const visible = mySongs.filter((song) => (selectedCategory === 'ALL' || song.category === selectedCategory)
+      && (!query || normalize([song.number, song.title, stripHtml(song.contentHtml)].join(' ')).includes(query)));
+    if (selectedCategory === 'ALL') {
+      visible.sort((a, b) => (Number(b.localUpdatedAt || b.storedAt) || 0) - (Number(a.localUpdatedAt || a.storedAt) || 0) || compareSongs(a, b));
+    }
+    mySongsCount.textContent = String(mySongs.length);
+    mySongsList.classList.toggle('is-upload-request-mode', isMySongUploadMode);
+    mySongsList.replaceChildren();
+    if (!mySongs.length) {
+      mySongsStatus.textContent = 'Belum ada lagu lokal. Tekan “Lagu baru” untuk menambahkan.';
+      return;
+    }
+    if (!visible.length) {
+      mySongsStatus.textContent = 'Tidak ada lagu yang cocok dengan pencarian.';
+      return;
+    }
+    mySongsStatus.textContent = '';
+    const fragment = document.createDocumentFragment();
+    visible.forEach((song, index) => {
+      const card = document.createElement('article');
+      card.className = 'song-card';
+      const categoryLabel = CATEGORIES.find((entry) => entry.code === song.category);
+      const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo)].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
+      if (isMySongUploadMode) {
+        const choice = document.createElement('label');
+        choice.className = 'my-song-upload-choice';
+        choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}><span class="song-index">${escapeText(song.number) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span>`;
+        card.append(choice);
+        fragment.append(card);
+        return;
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'song-card-main';
+      button.setAttribute('aria-label', `Buka ${song.category} ${song.number}, ${song.title}`);
+      button.innerHTML = `<span class="song-index">${escapeText(song.number) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
+      button.addEventListener('click', () => openSong(song, visible, index));
+      card.append(button);
+      const actions = document.createElement('span');
+      actions.className = 'my-song-list-actions';
+      actions.innerHTML = `<button type="button" data-my-song-action="edit" data-song-id="${escapeText(song.id)}" aria-label="Edit ${escapeText(song.title)}" title="Edit">&#9998;</button><button type="button" data-my-song-action="delete" data-song-id="${escapeText(song.id)}" aria-label="Hapus ${escapeText(song.title)}" title="Hapus"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button><button type="button" data-my-song-action="add" data-song-id="${escapeText(song.id)}" aria-label="Tambahkan ${escapeText(song.title)} ke jadwal aktif" title="Tambahkan ke jadwal aktif" ${activeScheduleId ? '' : 'disabled'}>+</button>`;
+      card.append(actions);
+      fragment.append(card);
+    });
+    mySongsList.append(fragment);
+  }
+
+  mySongsSearch.addEventListener('input', renderMySongs);
+  mySongsCategoryFilter.addEventListener('change', renderMySongs);
+  mySongsList.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('input[data-upload-song-id]');
+    if (!checkbox) return;
+    if (checkbox.checked) selectedMySongUploadIds.add(checkbox.dataset.uploadSongId);
+    else selectedMySongUploadIds.delete(checkbox.dataset.uploadSongId);
+    mySongsStatus.textContent = `${selectedMySongUploadIds.size} lagu dipilih.`;
+  });
+
+  function setMySongUploadMode(enabled) {
+    isMySongUploadMode = enabled;
+    selectedMySongUploadIds.clear();
+    uploadMySongsButton.textContent = enabled ? 'Request' : 'Upload ke koleksi lagu';
+    cancelMySongUploadButton.hidden = !enabled;
+    renderMySongs();
+    if (enabled) mySongsStatus.textContent = 'Pilih lagu yang ingin diunggah ke Koleksi Lagu.';
+  }
+
+  async function buildDatabaseSongPayload(song) {
+    const instruments = {};
+    for (const [instrument, files] of Object.entries(song.images || {})) {
+      const uploadFiles = [];
+      for (const file of (Array.isArray(files) ? files : [])) {
+        const dataUrl = typeof file === 'string' ? file : String(file?.url || file?.dataUrl || file?.data || '');
+        const match = dataUrl.match(/^data:([^;,]+)?;base64,([\s\S]+)$/i);
+        if (!match) throw new Error(`Gambar “${file?.name || instrument}” tidak memiliki data lokal yang bisa diunggah.`);
+        uploadFiles.push({
+          originalName: String(file?.name || `${song.title || 'Lagu'}_${instrument}.jpg`).split(/[\\/]/).pop(),
+          mimeType: file?.mimeType || match[1] || 'image/jpeg',
+          base64: match[2]
+        });
+      }
+      if (uploadFiles.length) instruments[instrument] = uploadFiles;
+    }
+    return {
+      category: song.category,
+      number: song.number,
+      title: song.title,
+      key: song.key || '',
+      genre: song.genre || '',
+      songCreator: song.songCreator || '',
+      dateCreate: song.dateCreate || '',
+      tempo: song.tempo || '',
+      contentHtml: song.contentHtml || '',
+      instrumentNames: Object.keys(song.images || {}),
+      instrumentRenames: [],
+      instruments
+    };
+  }
+
+  async function uploadSelectedMySongs(accessCode) {
+    const selected = mySongs.filter((song) => selectedMySongUploadIds.has(song.id));
+    if (!selected.length) {
+      mySongsStatus.textContent = 'Pilih minimal satu lagu untuk diunggah.';
+      return;
+    }
+    const uploaderName = readProfileUserName();
+    if (!uploaderName) {
+      mySongsStatus.textContent = 'Simpan nama pengguna di Profile sebelum mengirim lagu.';
+      instrumentProfileButton.click();
+      return;
+    }
+    uploadMySongsButton.disabled = true;
+    cancelMySongUploadButton.disabled = true;
+    try {
+      const songs = await Promise.all(selected.map(buildDatabaseSongPayload));
+      mySongsStatus.textContent = `Mengirim ${songs.length} lagu sementara…`;
+      const result = await postScheduleApi('submitTemporarySongs', { code: accessCode, uploaderName, songs }, 120000);
+      selected.forEach((song) => selectedMySongUploadIds.delete(song.id));
+      setMySongUploadMode(false);
+      mySongsStatus.textContent = `${result.count || songs.length} lagu berhasil dikirim oleh ${uploaderName} ke New Song Temporary.`;
+      const successList = document.getElementById('my-song-upload-success-list');
+      successList.replaceChildren();
+      selected.forEach((song) => {
+        const item = document.createElement('li');
+        item.textContent = `${song.category || ''} ${song.number || ''} ${song.title || ''} berhasil dikirim.`.trim();
+        successList.append(item);
+      });
+      document.getElementById('my-song-upload-success-dialog').showModal();
+    } catch (error) {
+      renderMySongs();
+      mySongsStatus.textContent = `Request gagal: ${error.message || 'Terjadi kesalahan.'}`;
+    } finally {
+      uploadMySongsButton.disabled = false;
+      cancelMySongUploadButton.disabled = false;
+    }
+  }
+
+  uploadMySongsButton.addEventListener('click', () => {
+    if (!isMySongUploadMode) setMySongUploadMode(true);
+    else if (!selectedMySongUploadIds.size) mySongsStatus.textContent = 'Pilih minimal satu lagu untuk diunggah.';
+    else {
+      document.getElementById('my-song-upload-access-status').textContent = '';
+      mySongUploadAccessCode.value = '';
+      mySongUploadAccessDialog.showModal();
+      mySongUploadAccessCode.focus();
+    }
+  });
+  cancelMySongUploadButton.addEventListener('click', () => setMySongUploadMode(false));
+  document.getElementById('close-my-song-upload-access').addEventListener('click', () => mySongUploadAccessDialog.close());
+  document.getElementById('close-my-song-upload-success').addEventListener('click', () => document.getElementById('my-song-upload-success-dialog').close());
+  document.getElementById('dismiss-my-song-upload-success').addEventListener('click', () => document.getElementById('my-song-upload-success-dialog').close());
+  mySongUploadAccessDialog.addEventListener('click', (event) => { if (event.target === mySongUploadAccessDialog) mySongUploadAccessDialog.close(); });
+  mySongUploadAccessCode.addEventListener('input', (event) => {
+    event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+  });
+  mySongUploadAccessForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!/^(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]{3}$/.test(mySongUploadAccessCode.value)) {
+      document.getElementById('my-song-upload-access-status').textContent = 'Kode harus terdiri dari 3 karakter dan memuat huruf serta angka.';
+      mySongUploadAccessCode.focus();
+      return;
+    }
+    const code = mySongUploadAccessCode.value;
+    mySongUploadAccessDialog.close();
+    uploadSelectedMySongs(code);
+  });
+
+  function openMySongDatabase() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(MY_SONG_DB, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore(MY_SONG_STORE, { keyPath: 'id' });
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Penyimpanan lokal tidak dapat dibuka.'));
+    });
+  }
+
+  async function loadMySongs() {
+    try {
+      const db = await openMySongDatabase();
+      const records = await new Promise((resolve, reject) => {
+        const request = db.transaction(MY_SONG_STORE, 'readonly').objectStore(MY_SONG_STORE).getAll();
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => reject(request.error);
+      });
+      db.close();
+      mySongs = records.sort(compareSongs);
+      renderMySongs();
+    } catch (error) {
+      mySongsStatus.textContent = 'Penyimpanan lagu lokal tidak tersedia di browser ini.';
+      console.warn('Daftar Laguku tidak dapat dimuat:', error);
+    }
+  }
+
+  function addMySongInstrument(instrumentName = 'Partitur') {
+    const row = document.createElement('div');
+    row.className = 'my-song-instrument-row';
+    row.innerHTML = '<label class="schedule-field">INSTRUMEN<span class="my-song-instrument-select-row"><select class="my-song-instrument-name"><option value="Partitur">Partitur</option><option value="Others">Others</option></select><button class="schedule-refresh-songs my-song-refresh-instruments" type="button" aria-label="Perbarui daftar instrumen" title="Perbarui daftar instrumen"><span aria-hidden="true">&#8635;</span></button></span><input class="my-song-other-instrument" placeholder="Ketik nama instrumen" aria-label="Nama instrumen lainnya" hidden></label><label class="schedule-field">GAMBAR PARTITUR<span class="my-song-existing-score-files"></span><span class="my-song-score-inputs"></span></label><button class="my-song-remove-instrument" type="button" aria-label="Hapus instrumen"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button>';
+    const select = row.querySelector('.my-song-instrument-name');
+    const otherInput = row.querySelector('.my-song-other-instrument');
+    populateMySongInstrumentSelect(select, otherInput, instrumentName);
+    select.addEventListener('change', (event) => {
+      otherInput.hidden = event.target.value !== 'Others';
+      otherInput.required = event.target.value === 'Others';
+      if (event.target.value === 'Others') otherInput.focus();
+    });
+    row.querySelector('.my-song-refresh-instruments').addEventListener('click', (event) => loadMySongInstrumentOptions(event.currentTarget));
+    row.querySelector('.my-song-remove-instrument').addEventListener('click', () => row.remove());
+    mySongInstrumentList.append(row);
+    appendMySongScoreInput(row);
+  }
+
+  function appendMySongScoreInput(row) {
+    const item = document.createElement('span');
+    item.className = 'my-song-score-input-item';
+    const input = document.createElement('input');
+    input.className = 'my-song-score-files';
+    input.type = 'file';
+    input.accept = 'image/*';
+    const previewButton = document.createElement('button');
+    previewButton.type = 'button';
+    previewButton.className = 'my-song-new-score-preview';
+    previewButton.hidden = true;
+    previewButton.setAttribute('aria-label', 'Pratinjau gambar yang dipilih');
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if (!file) return;
+      const objectUrl = URL.createObjectURL(file);
+      const image = document.createElement('img');
+      image.src = objectUrl;
+      image.alt = file.name;
+      previewButton.replaceChildren(image);
+      previewButton.dataset.previewUrl = objectUrl;
+      previewButton.dataset.previewName = file.name;
+      previewButton.hidden = false;
+      row.classList.add('has-new-score-selection');
+      const inputs = [...row.querySelectorAll('.my-song-score-files')];
+      if (inputs[inputs.length - 1] === input) appendMySongScoreInput(row);
+    });
+    item.append(input, previewButton);
+    row.querySelector('.my-song-score-inputs').append(item);
+  }
+
+  function renderMySongExistingImages(row, files) {
+    const list = row?.querySelector('.my-song-existing-score-files');
+    if (!list) return;
+    list.replaceChildren();
+    (Array.isArray(files) ? files : []).forEach((file, index) => {
+      const item = document.createElement('span');
+      item.className = 'my-song-existing-score-file';
+      const previewButton = document.createElement('button');
+      previewButton.type = 'button';
+      previewButton.className = 'my-song-existing-score-preview';
+      previewButton.dataset.imageIndex = String(index);
+      const image = document.createElement('img');
+      image.src = (file && typeof file === 'object' && (file.url || file.dataUrl || file.data)) || '';
+      image.alt = `Gambar partitur tersimpan ${index + 1}`;
+      const name = document.createElement('span');
+      name.textContent = file && typeof file === 'object' && file.name ? file.name : `Gambar tersimpan ${index + 1}`;
+      previewButton.append(image);
+      item.append(previewButton, name);
+      list.append(item);
+    });
+  }
+
+  mySongInstrumentList.addEventListener('click', (event) => {
+    const button = event.target.closest('.my-song-existing-score-preview, .my-song-new-score-preview');
+    if (!button) return;
+    const row = button.closest('.my-song-instrument-row');
+    const name = row?.querySelector('.my-song-instrument-name');
+    const instrument = name?.value === 'Others' ? row.querySelector('.my-song-other-instrument').value.trim() : name?.value;
+    const selectedUrl = button.dataset.previewUrl;
+    const file = selectedUrl ? null : editingMySong?.images?.[instrument]?.[Number(button.dataset.imageIndex)];
+    const url = selectedUrl || (file && typeof file === 'object' ? (file.url || file.dataUrl || file.data) : '');
+    if (!url) return;
+    const dialog = document.getElementById('my-song-image-preview');
+    document.getElementById('my-song-image-preview-img').src = url;
+    document.getElementById('my-song-image-preview-name').textContent = button.dataset.previewName || file?.name || 'Gambar partitur';
+    dialog.showModal();
+  });
+
+  function populateMySongInstrumentSelect(select, otherInput, selectedName) {
+    const names = [...new Set(mySongInstrumentNames.map((name) => String(name || '').trim()).filter((name) => name && !/^(partitur|others)$/i.test(name)))];
+    select.replaceChildren(new Option('Partitur', 'Partitur'));
+    names.forEach((name) => select.add(new Option(name, name)));
+    select.add(new Option('Others', 'Others'));
+    const selected = String(selectedName || '').trim();
+    const match = names.find((name) => normalize(name) === normalize(selected));
+    if (!selected || normalize(selected) === 'partitur') {
+      select.value = 'Partitur'; otherInput.value = ''; otherInput.hidden = true; otherInput.required = false;
+    } else if (match) {
+      select.value = match; otherInput.value = ''; otherInput.hidden = true; otherInput.required = false;
+    } else {
+      select.value = 'Others'; otherInput.value = selected; otherInput.hidden = false; otherInput.required = true;
+    }
+  }
+
+  function loadMySongInstrumentOptions(triggerButton = null) {
+    const callbackName = `cb_${Date.now()}_${++callbackCounter}`;
+    const script = document.createElement('script');
+    let settled = false;
+    if (triggerButton) { triggerButton.disabled = true; triggerButton.classList.add('is-loading'); }
+    const timeout = window.setTimeout(() => finish(new Error('Waktu memuat daftar instrumen habis.')), 10000);
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      delete window.SongBookCallbacks[callbackName];
+      script.remove();
+      if (triggerButton) { triggerButton.disabled = false; triggerButton.classList.remove('is-loading'); }
+      if (error || !result || !result.ok || !Array.isArray(result.instruments)) {
+        console.warn('Daftar instrumen untuk lagu baru tidak dapat dimuat:', (error && error.message) || (result && result.error) || 'Respons tidak valid.');
+        if (triggerButton) triggerButton.title = 'Gagal memperbarui daftar instrumen';
+        return;
+      }
+      mySongInstrumentNames = result.instruments;
+      mySongInstrumentList.querySelectorAll('.my-song-instrument-row').forEach((row) => {
+        const select = row.querySelector('.my-song-instrument-name');
+        const input = row.querySelector('.my-song-other-instrument');
+        const selected = select.value === 'Others' ? input.value : select.value;
+        populateMySongInstrumentSelect(select, input, selected);
+      });
+      if (triggerButton) {
+        triggerButton.title = 'Daftar instrumen berhasil diperbarui';
+        window.setTimeout(() => { if (triggerButton.isConnected) triggerButton.title = 'Perbarui daftar instrumen'; }, 2500);
+      }
+    }
+    window.SongBookCallbacks = window.SongBookCallbacks || {};
+    window.SongBookCallbacks[callbackName] = (result) => finish(null, result);
+    script.onerror = () => finish(new Error('Tidak dapat mengakses API daftar instrumen.'));
+    const url = new URL(API_URL);
+    url.searchParams.set('action', 'instruments');
+    url.searchParams.set('callback', `SongBookCallbacks.${callbackName}`);
+    url.searchParams.set('_refresh', String(Date.now()));
+    script.src = url.toString();
+    document.head.append(script);
+  }
+
+  function readLocalImage(file, path) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ name: path, url: String(reader.result), mimeType: file.type || 'application/octet-stream' });
+      reader.onerror = () => reject(new Error(`Gagal membaca ${file.name}.`));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function safeLocalFilePart(value) {
+    return String(value || '').replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim() || 'Lagu';
+  }
+
+  function getSongSectionLabel(line) {
+    const trimmed = line.trim();
+    const bracketed = trimmed.match(/^\[([^\]\n]{1,60})\]\s*:?[ \t]*$/) || trimmed.match(/^\{([^}\n]{1,60})\}\s*:?[ \t]*$/);
+    if (bracketed) return bracketed[1].trim();
+    const unwrapped = trimmed.replace(/:$/, '').trim();
+    return songSectionPattern.test(unwrapped) ? unwrapped.replace(/^\d+[.)]?\s*/, '') : '';
+  }
+
+  function updateMySongHighlight() {
+    const value = mySongContentInput.value || '[Intro]\nG   D   Em\n\n[Bait 1]\nLirik lagu\n\n[Reff]\nC   D   G';
+    mySongHighlight.classList.toggle('is-placeholder', !mySongContentInput.value);
+    mySongHighlight.innerHTML = value.split('\n').map((line) => getSongSectionLabel(line)
+      ? `<span class="my-song-section-marker">${escapeText(line)}</span>`
+      : escapeText(line)).join('\n') + '\n';
+    mySongContentInput.style.height = 'auto';
+    const maxHeight = Math.max(180, Math.floor(window.innerHeight * 0.62));
+    mySongContentInput.style.height = `${Math.min(Math.max(mySongContentInput.scrollHeight, 340), maxHeight)}px`;
+    mySongHighlight.style.height = mySongContentInput.style.height;
+    mySongContentInput.parentElement.style.height = mySongContentInput.style.height;
+    mySongHighlight.style.transform = `translate(${-mySongContentInput.scrollLeft}px, ${-mySongContentInput.scrollTop}px)`;
+  }
+
+  mySongContentInput.addEventListener('input', updateMySongHighlight);
+  mySongContentInput.addEventListener('scroll', updateMySongHighlight, { passive: true });
+
+  function localFileExtension(file) {
+    const ext = String(file.name || '').match(/\.([a-z0-9]{1,8})$/i)?.[1];
+    if (ext) return `.${ext.toLowerCase()}`;
+    return ({ 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' })[file.type] || '.jpg';
+  }
+
+  async function saveMySong(event) {
+    event.preventDefault();
+    if (!mySongForm.reportValidity()) return;
+    const statusEl = document.getElementById('my-song-form-status');
+    const submit = document.getElementById('save-my-song');
+    submit.disabled = true;
+    statusEl.textContent = 'Menyimpan di perangkat ini…';
+    try {
+      const category = document.getElementById('my-song-category').value;
+      const number = document.getElementById('my-song-number').value.trim();
+      const title = document.getElementById('my-song-title').value.trim();
+      const stem = safeLocalFilePart(`${category} ${number} ${title}`);
+      const images = {};
+      const seenInstruments = new Set();
+      for (const row of mySongInstrumentList.querySelectorAll('.my-song-instrument-row')) {
+        const select = row.querySelector('.my-song-instrument-name');
+        const instrument = select.value === 'Others' ? row.querySelector('.my-song-other-instrument').value.trim() : select.value;
+        const files = [...row.querySelectorAll('.my-song-score-files')].flatMap((input) => [...input.files]);
+        const existingFiles = editingMySong?.images?.[instrument] || [];
+        if (!instrument && files.length) throw new Error('Isi nama instrumen untuk gambar yang dipilih.');
+        if (!instrument) continue;
+        if (seenInstruments.has(instrument.toLowerCase())) throw new Error(`Nama instrumen “${instrument}” muncul lebih dari satu kali.`);
+        seenInstruments.add(instrument.toLowerCase());
+        if (!files.length) {
+          if (existingFiles.length) images[instrument] = existingFiles;
+          continue;
+        }
+        if (files.some((file) => !file.type.startsWith('image/'))) throw new Error('Pilih file gambar yang valid.');
+        if (files.some((file) => file.size > 8 * 1024 * 1024)) throw new Error('Ukuran setiap gambar maksimal 8 MB.');
+        const slug = safeLocalFilePart(instrument.toLowerCase());
+        const addedImages = await Promise.all(files.map((file, fileIndex) => readLocalImage(file, `SongImg/${stem} _${slug}${existingFiles.length + files.length > 1 ? `_${existingFiles.length + fileIndex + 1}` : ''}${localFileExtension(file)}`)));
+        images[instrument] = addedImages;
+      }
+      const localSong = {
+        id: editingMySongId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        category, number, title,
+        key: document.getElementById('my-song-key').value.trim(),
+        genre: document.getElementById('my-song-genre').value.trim(),
+        songCreator: document.getElementById('my-song-creator').value.trim(),
+        dateCreate: document.getElementById('my-song-date').value.trim(),
+        tempo: document.getElementById('my-song-tempo').value.trim(),
+        contentHtml: `<pre>${escapeText(document.getElementById('my-song-content').value)}</pre>`,
+        images,
+        storedAt: editingMySong?.storedAt || Date.now(),
+        localUpdatedAt: Date.now()
+      };
+      const db = await openMySongDatabase();
+      await new Promise((resolve, reject) => {
+        const request = db.transaction(MY_SONG_STORE, 'readwrite').objectStore(MY_SONG_STORE).put(localSong);
+        request.onsuccess = resolve;
+        request.onerror = () => reject(request.error);
+      });
+      db.close();
+      const oldIndex = mySongs.findIndex((item) => item.id === localSong.id);
+      if (oldIndex >= 0) mySongs.splice(oldIndex, 1, localSong);
+      else mySongs.push(localSong);
+      mySongs.sort(compareSongs);
+      renderMySongs();
+      mySongForm.reset();
+      mySongInstrumentList.replaceChildren();
+      addMySongInstrument();
+      statusEl.textContent = editingMySongId ? 'Perubahan lagu tersimpan lokal di perangkat ini.' : 'Lagu dan gambar tersimpan lokal di perangkat ini.';
+      editingMySongId = '';
+      editingMySong = null;
+      document.getElementById('my-song-form-title').textContent = 'Detail lagu baru';
+      document.getElementById('save-my-song').textContent = 'Simpan lagu';
+      mySongDialog.close();
+    } catch (error) {
+      statusEl.textContent = error.message || 'Lagu gagal disimpan.';
+    } finally {
+      submit.disabled = false;
+    }
+  }
+
+  function openMySongEditor(song) {
+    editingMySongId = song.id;
+    editingMySong = song;
+    mySongForm.reset();
+    document.getElementById('my-song-form-title').textContent = 'Edit lagu';
+    document.getElementById('save-my-song').textContent = 'Simpan perubahan';
+    document.getElementById('my-song-category').value = song.category || '';
+    document.getElementById('my-song-number').value = song.number || '';
+    document.getElementById('my-song-title').value = song.title || '';
+    document.getElementById('my-song-key').value = song.key || '';
+    document.getElementById('my-song-genre').value = song.genre || '';
+    document.getElementById('my-song-creator').value = song.songCreator || '';
+    document.getElementById('my-song-date').value = song.dateCreate || '';
+    document.getElementById('my-song-tempo').value = song.tempo || '';
+    mySongContentInput.value = htmlToEditableText(song.contentHtml || '');
+    mySongInstrumentList.replaceChildren();
+    const names = Object.keys(song.images || {});
+    if (names.length) names.forEach((name) => {
+      addMySongInstrument(name);
+      renderMySongExistingImages(mySongInstrumentList.lastElementChild, song.images[name]);
+    });
+    else addMySongInstrument();
+    updateMySongHighlight();
+    document.getElementById('my-song-form-status').textContent = 'Perubahan hanya disimpan di perangkat ini.';
+    mySongDialog.showModal();
+  }
+
+  function confirmMySongDeletion(song) {
+    pendingMySongDeleteId = song.id;
+    document.getElementById('delete-my-song-message').textContent = `Hapus lagu "${song.category} ${song.number} · ${song.title}" dari Laguku?`;
+    deleteMySongDialog.showModal();
+  }
+
+  async function finishMySongDeletion(confirmed) {
+    const songId = pendingMySongDeleteId;
+    pendingMySongDeleteId = '';
+    if (deleteMySongDialog.open) deleteMySongDialog.close();
+    if (!confirmed || !songId) return;
+    try {
+      const db = await openMySongDatabase();
+      await new Promise((resolve, reject) => {
+        const request = db.transaction(MY_SONG_STORE, 'readwrite').objectStore(MY_SONG_STORE).delete(songId);
+        request.onsuccess = resolve;
+        request.onerror = () => reject(request.error);
+      });
+      db.close();
+      mySongs = mySongs.filter((song) => song.id !== songId);
+      renderMySongs();
+      mySongsStatus.textContent = 'Lagu berhasil dihapus dari perangkat ini.';
+    } catch (error) {
+      mySongsStatus.textContent = 'Lagu tidak dapat dihapus dari penyimpanan lokal.';
+    }
+  }
+
+  document.getElementById('add-my-song').addEventListener('click', () => {
+    editingMySongId = '';
+    editingMySong = null;
+    mySongForm.reset();
+    mySongInstrumentList.replaceChildren();
+    addMySongInstrument();
+    updateMySongHighlight();
+    document.getElementById('my-song-form-title').textContent = 'Detail lagu baru';
+    document.getElementById('save-my-song').textContent = 'Simpan lagu';
+    document.getElementById('my-song-form-status').textContent = 'Field kategori, nomor, judul, dan lirik wajib diisi.';
+    mySongDialog.showModal();
+  });
+  document.getElementById('close-my-song-form').addEventListener('click', () => mySongDialog.close());
+  document.getElementById('close-my-song-image-preview').addEventListener('click', () => document.getElementById('my-song-image-preview').close());
+  document.getElementById('my-song-image-preview').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
+  document.getElementById('add-my-song-instrument').addEventListener('click', addMySongInstrument);
+  mySongForm.addEventListener('submit', saveMySong);
+  mySongDialog.addEventListener('click', (event) => { if (event.target === mySongDialog) mySongDialog.close(); });
+  document.getElementById('confirm-delete-my-song').addEventListener('click', () => finishMySongDeletion(true));
+  document.getElementById('cancel-delete-my-song').addEventListener('click', () => finishMySongDeletion(false));
+  document.getElementById('close-delete-my-song').addEventListener('click', () => finishMySongDeletion(false));
+  deleteMySongDialog.addEventListener('click', (event) => { if (event.target === deleteMySongDialog) finishMySongDeletion(false); });
+  deleteMySongDialog.addEventListener('close', () => { pendingMySongDeleteId = ''; });
+  mySongsList.addEventListener('click', handleMySongListClick);
+  const libraryTabs = document.querySelector('.library-tabs');
+  function activateLibraryTab(tab) {
+    libraryTabs.querySelectorAll('[role="tab"]').forEach((item) => {
+      const selected = item === tab;
+      item.setAttribute('aria-selected', String(selected));
+      item.tabIndex = selected ? 0 : -1;
+      item.classList.toggle('is-selected', selected);
+      document.getElementById(item.dataset.tabPanel).hidden = !selected;
+      if (item === instrumentProfileButton && selected) prepareInstrumentProfileOptions();
+    });
+  }
+  libraryTabs.addEventListener('click', (event) => {
+    const tab = event.target.closest('[role="tab"]');
+    if (tab) activateLibraryTab(tab);
+  });
+  libraryTabs.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const tabs = [...libraryTabs.querySelectorAll('[role="tab"]')];
+    const current = tabs.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    activateLibraryTab(tabs[next]);
+  });
+  addMySongInstrument();
+  loadMySongInstrumentOptions();
+  loadMySongs();
 
   function stripHtml(value) {
     const parsed = new DOMParser().parseFromString(String(value || ''), 'text/html');
@@ -1493,7 +2252,7 @@
     }
   }
 
-  function openGeneralSongScoreAt(index) {
+  function openGeneralSongScoreAt(index, pageIndex = 0) {
     const song = currentPreviewSongs[index];
     const instrument = findDefaultScoreInstrument(song);
     if (!song || !instrument) return;
@@ -1503,7 +2262,7 @@
     scoreImageMode = 'score';
     activeScoreInstrument = instrument;
     activeScoreFiles = song.images[instrument];
-    activeScoreIndex = 0;
+    activeScoreIndex = Math.max(0, Math.min(pageIndex, activeScoreFiles.length - 1));
     renderScoreImageInstrumentButtons();
     renderFullScoreImage();
     showScoreImageControls();
@@ -1606,9 +2365,29 @@
 
   function moveFullScoreImage(direction) {
     const nextIndex = activeScoreIndex + direction;
-    if (nextIndex < 0 || nextIndex >= activeScoreFiles.length) return;
-    activeScoreIndex = nextIndex;
-    renderFullScoreImage();
+    if (nextIndex >= 0 && nextIndex < activeScoreFiles.length) {
+      activeScoreIndex = nextIndex;
+      renderFullScoreImage();
+      return;
+    }
+    if (direction > 0 && scoreImageMode === 'score' && nextIndex >= activeScoreFiles.length) {
+      const nextSongIndex = findNextGeneralSongIndex();
+      if (nextSongIndex >= 0) {
+        introGeneralNavigationActive = true;
+        openGeneralSongScoreAt(nextSongIndex);
+      }
+      return;
+    }
+    if (direction < 0 && scoreImageMode === 'score' && nextIndex < 0) {
+      const previousSongIndex = findPreviousGeneralSongIndex();
+      if (previousSongIndex >= 0) {
+        introGeneralNavigationActive = true;
+        const previousSong = currentPreviewSongs[previousSongIndex];
+        const instrument = findDefaultScoreInstrument(previousSong);
+        const previousPages = previousSong?.images?.[instrument] || [];
+        openGeneralSongScoreAt(previousSongIndex, previousPages.length - 1);
+      }
+    }
   }
 
   function findDefaultScoreInstrument(song) {
@@ -1624,15 +2403,19 @@
       || '';
   }
 
-  function saveInstrumentProfile(value) {
+  function saveInstrumentProfile(value, userName) {
     preferredInstrument = String(value || '').trim();
+    preferredUserName = String(userName || '').trim();
     try {
       if (preferredInstrument) localStorage.setItem(INSTRUMENT_PROFILE_KEY, preferredInstrument);
       else localStorage.removeItem(INSTRUMENT_PROFILE_KEY);
-    } catch (error) { console.warn('Profil instrumen tidak dapat disimpan di perangkat ini:', error); }
-    const button = document.getElementById('instrument-filter-open');
-    button.setAttribute('aria-pressed', String(Boolean(preferredInstrument)));
-    button.title = preferredInstrument ? `Profil instrumen: ${preferredInstrument}` : 'Pilih profil instrumen';
+      if (preferredUserName) localStorage.setItem(PROFILE_USER_NAME_KEY, preferredUserName);
+      else localStorage.removeItem(PROFILE_USER_NAME_KEY);
+    } catch (error) {
+      console.warn('Profile tidak dapat disimpan di perangkat ini:', error);
+      return false;
+    }
+    instrumentProfileButton.title = preferredInstrument ? `Profile: ${preferredInstrument}` : 'Profile';
 
     if (currentPreviewSong) {
       const instrument = findDefaultScoreInstrument(currentPreviewSong);
@@ -1642,6 +2425,7 @@
         openScoreInstrument(instrument);
       }
     }
+    return true;
   }
 
   function formatScoreSongLabel(song) {
@@ -2048,11 +2832,22 @@
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
   refreshButton.addEventListener('click', loadSongs);
   document.getElementById('create-schedule').addEventListener('click', addSchedule);
-  document.getElementById('share-schedule-open').addEventListener('click', () => { fillShareSchedules(); document.getElementById('share-result').hidden = true; document.getElementById('share-status').textContent = ''; shareDialog.showModal(); });
+  document.getElementById('share-schedule-open').addEventListener('click', () => {
+    if (activeScheduleShare && activeScheduleShare.expiresAt > Date.now()) {
+      stopSharing(false);
+      return;
+    }
+    fillShareSchedules();
+    document.getElementById('share-result').hidden = true;
+    document.getElementById('share-status').textContent = '';
+    renderShareButtonState();
+    shareDialog.showModal();
+  });
   document.getElementById('pull-schedule-open').addEventListener('click', () => { document.getElementById('pull-status').textContent = ''; pullDialog.showModal(); });
   document.querySelector('[data-close-share]').addEventListener('click', () => shareDialog.close());
   document.querySelector('[data-close-pull]').addEventListener('click', () => pullDialog.close());
   document.getElementById('share-schedule-submit').addEventListener('click', shareSelectedSchedule);
+  document.getElementById('minimize-share-dialog').addEventListener('click', () => shareDialog.close());
   document.getElementById('share-schedule-options').addEventListener('click', (event) => {
     const choice = event.target.closest('[data-schedule-id]');
     if (!choice) return;
@@ -2206,9 +3001,8 @@
   });
   deleteScheduleDialog.addEventListener('close', () => { pendingScheduleDeletionId = ''; });
   songList.addEventListener('click', handleCollectionClick);
-  targetScheduleSelect.addEventListener('change', () => { activeScheduleId = targetScheduleSelect.value; });
+  scheduleList.addEventListener('change', handleActiveScheduleChange);
   search.addEventListener('input', handleSearchInput);
-  collapseCollectionButton.addEventListener('click', () => setCollectionCollapsed(!isCollectionCollapsed));
   scheduleList.addEventListener('pointerdown', handleScheduleDragStart);
   scheduleList.addEventListener('pointermove', handleScheduleDragMove);
   scheduleList.addEventListener('pointerup', finishScheduleDrag);
@@ -2233,6 +3027,7 @@
   filters.replaceChildren();
   loadSchedules();
   renderSchedules();
+  restoreActiveScheduleShare();
   const hasCache = loadCachedSongs();
   if (!hasCache) {
     count.textContent = '0';
