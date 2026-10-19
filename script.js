@@ -137,7 +137,6 @@
   const pullDialog = document.getElementById('schedule-pull-dialog');
   let shareTimer = 0;
   let activeScheduleShare = readActiveScheduleShare();
-  let isCachingScheduleImages = false;
   const scheduleImageObjectUrls = new Map();
   let shareExpiresAt = activeScheduleShare ? activeScheduleShare.expiresAt : 0;
 
@@ -325,7 +324,6 @@
       buildFilters();
       renderList();
       renderSchedules();
-      cacheExistingScheduleImagesOffline();
     }
 
     window.SongBookCallbacks = window.SongBookCallbacks || {};
@@ -738,10 +736,6 @@
       const sharerName = `${rawSharerName.charAt(0).toLocaleUpperCase('id')}${rawSharerName.slice(1)}`;
       const sourceTitle = String(received.title || 'Jadwal ibadah').replace(/\s*\(salinan(?:\s+dari[^)]*)?\)\s*$/i, '').trim() || 'Jadwal ibadah';
       const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
-      for (const entry of imported.songs) {
-        const cachedImages = await cacheScheduleImagesOffline(entry.images || {});
-        entry.images = cachedImages.images;
-      }
       schedules.unshift(imported);
       activeScheduleId = imported.id;
       saveSchedules();
@@ -842,8 +836,7 @@
       }
       const entryId = entry.entryId;
       const preWorship = Boolean(entry.preWorship);
-      const cached = await cacheScheduleImagesOffline(latestSong.images || {});
-      Object.assign(entry, createScheduledEntry(latestSong, cached.images), { entryId, preWorship, overrides: {} });
+      Object.assign(entry, createScheduledEntry(latestSong), { entryId, preWorship, overrides: {} });
       updatedCount += 1;
     }
     if (!updatedCount) {
@@ -1104,19 +1097,17 @@
     window.setTimeout(() => card.classList.remove('schedule-just-imported'), 7000);
   }
 
-  async function addSongToSchedule(songId) {
+  function addSongToSchedule(songId) {
     const schedule = schedules.find((item) => item.id === activeScheduleId);
     const song = songs.find((item) => item.id === songId) || mySongs.find((item) => item.id === songId);
     if (!schedule || !song) return;
-    scheduleStatus.textContent = 'Menyalin gambar lagu ke penyimpanan lokal…';
-    const cached = await cacheScheduleImagesOffline(song.images || {});
     const currentSchedule = schedules.find((item) => item.id === schedule.id);
     if (!currentSchedule) return;
-    currentSchedule.songs.push(createScheduledEntry(song, cached.images));
+    currentSchedule.songs.push(createScheduledEntry(song));
     currentSchedule.isOpen = true;
     saveSchedules();
     renderSchedules();
-    scheduleStatus.textContent = `${song.title} ditambahkan ke "${currentSchedule.title || 'Jadwal tanpa nama'}"${cached.failed ? `. ${cached.failed} gambar belum tersimpan untuk akses offline.` : '.'}`;
+    scheduleStatus.textContent = `${song.title} ditambahkan ke "${currentSchedule.title || 'Jadwal tanpa nama'}".`;
   }
 
   function handleCollectionClick(event) {
@@ -1195,84 +1186,6 @@
     });
   }
 
-  async function storeScheduleImage(key, blob) {
-    const db = await openScheduleImageDatabase();
-    await new Promise((resolve, reject) => {
-      const request = db.transaction('images', 'readwrite').objectStore('images').put({ key, blob, mimeType: blob.type || 'image/jpeg' });
-      request.onsuccess = resolve;
-      request.onerror = () => reject(request.error);
-    });
-    db.close();
-    const previousUrl = scheduleImageObjectUrls.get(key);
-    if (previousUrl) URL.revokeObjectURL(previousUrl);
-    scheduleImageObjectUrls.set(key, URL.createObjectURL(blob));
-  }
-
-  async function getScheduleImageObjectUrl(key) {
-    if (scheduleImageObjectUrls.has(key)) return scheduleImageObjectUrls.get(key);
-    const db = await openScheduleImageDatabase();
-    const record = await new Promise((resolve, reject) => {
-      const request = db.transaction('images', 'readonly').objectStore('images').get(key);
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(request.error);
-    });
-    db.close();
-    if (!record || !record.blob) return '';
-    const objectUrl = URL.createObjectURL(record.blob);
-    scheduleImageObjectUrls.set(key, objectUrl);
-    return objectUrl;
-  }
-
-  async function cacheScheduleImagesOffline(images) {
-    const cachedImages = {};
-    let failed = 0;
-    for (const [instrument, files] of Object.entries(images || {})) {
-      if (!Array.isArray(files)) continue;
-      cachedImages[instrument] = [];
-      for (const file of files) {
-        const source = typeof file === 'string' ? file : String(file?.url || file?.dataUrl || file?.data || '');
-        if (file && typeof file === 'object' && file.localCacheKey) {
-          try {
-            if (await getScheduleImageObjectUrl(file.localCacheKey)) {
-              cachedImages[instrument].push(file);
-              continue;
-            }
-          } catch (error) {}
-        }
-        const isDataUrl = /^data:image\//i.test(source);
-        const imageId = isDataUrl ? '' : scoreImageId(file);
-        if (isDataUrl || imageId) {
-          const cacheKey = `schedule-image_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-          try {
-            let blob;
-            let metadata = typeof file === 'object' && file ? { ...file } : {};
-            if (isDataUrl) {
-              blob = await fetch(source).then((response) => response.blob());
-              delete metadata.url;
-              delete metadata.dataUrl;
-              delete metadata.data;
-              delete metadata.driveUrl;
-            } else {
-              const image = await postScheduleApi('cacheScheduleImage', { imageId }, 60000);
-              const bytes = Uint8Array.from(atob(image.base64), (char) => char.charCodeAt(0));
-              blob = new Blob([bytes], { type: image.mimeType || 'image/jpeg' });
-              metadata = { ...metadata, url: source, driveUrl: file?.driveUrl || source, name: image.name || file?.name || '', mimeType: image.mimeType || 'image/jpeg' };
-            }
-            if (!blob.type.startsWith('image/')) throw new Error('Data bukan gambar.');
-            await storeScheduleImage(cacheKey, blob);
-            cachedImages[instrument].push({ ...metadata, localCacheKey: cacheKey });
-          } catch (error) {
-            cachedImages[instrument].push(file);
-            failed += 1;
-          }
-          continue;
-        }
-        cachedImages[instrument].push(file);
-      }
-    }
-    return { images: cachedImages, failed };
-  }
-
   function imagesForScheduleShare(images) {
     const shareable = {};
     Object.entries(images || {}).forEach(([instrument, files]) => {
@@ -1287,36 +1200,6 @@
       });
     });
     return shareable;
-  }
-
-  async function cacheExistingScheduleImagesOffline() {
-    if (isCachingScheduleImages) return;
-    isCachingScheduleImages = true;
-    let changed = false;
-    try {
-      for (const schedule of schedules) {
-        for (const entry of schedule.songs || []) {
-          const sourceSong = songs.find((song) => song.id === entry.id) || mySongs.find((song) => song.id === entry.id) || {};
-          const images = entry.images && Object.keys(entry.images).length ? entry.images : sourceSong.images || {};
-          const needsCopy = Object.values(images).some((files) => Array.isArray(files) && files.some((file) => {
-            const source = typeof file === 'string' ? file : String(file?.url || file?.dataUrl || file?.data || '');
-            return Boolean(file?.localCacheKey) || (source && (/^data:image\//i.test(source) || Boolean(scoreImageId(file))));
-          }));
-          if (!needsCopy) continue;
-          const result = await cacheScheduleImagesOffline(images);
-          if (Object.values(result.images).some((files) => files.some((file) => typeof file === 'object' && file.localCacheKey))) {
-            entry.images = result.images;
-            changed = true;
-          }
-        }
-      }
-      if (changed) {
-        saveSchedules();
-        renderSchedules();
-      }
-    } finally {
-      isCachingScheduleImages = false;
-    }
   }
 
   function handleScheduleClick(event) {
@@ -1879,7 +1762,6 @@
       db.close();
       mySongs = records.sort(compareSongs);
       renderMySongs();
-      cacheExistingScheduleImagesOffline();
     } catch (error) {
       mySongsStatus.textContent = 'Penyimpanan lagu lokal tidak tersedia di browser ini.';
       console.warn('Daftar Laguku tidak dapat dimuat:', error);
