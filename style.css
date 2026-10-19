@@ -271,6 +271,7 @@ html,body{height:100%;overflow:hidden}
 .schedule-panel,.library-tabs-shell{flex:0 0 auto}
 .library-tabs-shell,.library{margin-top:0}
 .footer-note{flex:0 0 auto;margin:0;padding:7px 4px max(3px,env(safe-area-inset-bottom));background:#f5f7f3}
+.footer-app-name{font-weight:700}
 @media(max-width:600px){.app-shell{width:min(100% - 30px,980px);padding:8px 0 4px}.main-scroll-area{gap:10px;padding-right:1px;padding-left:1px}.library-tabs-shell{margin-top:0}.footer-note{gap:4px;padding-top:5px;font-size:9px}.footer-note img{width:20px;height:20px}}
 .schedule-secondary-button.is-sharing{border-color:#e7c8c5;background:#fff5f3;color:#a64b42}.schedule-secondary-button.is-sharing:hover{background:#ffefec}
 .schedule-share-status{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;border:1px solid #d9e9dc;border-radius:8px;background:#f4faf4;padding:8px 10px;color:#4d7057;font-size:10px}.schedule-share-status strong{color:var(--green);font:700 12px "DM Sans",sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap}
