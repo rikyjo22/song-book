@@ -3069,6 +3069,10 @@
   document.getElementById('score-previous').addEventListener('click', () => moveScorePage(-1));
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
   refreshButton.addEventListener('click', loadSongs);
+  const aboutProgramDialog = document.getElementById('about-program-dialog');
+  document.getElementById('about-program-open').addEventListener('click', () => aboutProgramDialog.showModal());
+  document.getElementById('close-about-program').addEventListener('click', () => aboutProgramDialog.close());
+  aboutProgramDialog.addEventListener('click', (event) => { if (event.target === aboutProgramDialog) aboutProgramDialog.close(); });
   document.getElementById('create-schedule').addEventListener('click', addSchedule);
   document.getElementById('share-schedule-open').addEventListener('click', () => {
     if (activeScheduleShare && activeScheduleShare.expiresAt > Date.now()) {
