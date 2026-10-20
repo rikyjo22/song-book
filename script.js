@@ -2,7 +2,7 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbzB0sm4UrusQgjPHyC_n8QDy9SdbT5gCi0gvzN-nW-5yocuas7Jr0m3PXcUrrhhgicwOg/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzOWUvFz1gSQQ9yLDXJiSEj0aOUlCjN_zlRrbk8-ZGe7lL6NZCxMimUDbKJ1SbZOhHq7g/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
@@ -136,6 +136,8 @@
   const shareDialog = document.getElementById('schedule-share-dialog');
   const pullDialog = document.getElementById('schedule-pull-dialog');
   let shareTimer = 0;
+  let sharePullerSyncInFlight = false;
+  let lastSharePullerSyncAt = 0;
   let activeScheduleShare = readActiveScheduleShare();
   const scheduleImageObjectUrls = new Map();
   let shareExpiresAt = activeScheduleShare ? activeScheduleShare.expiresAt : 0;
@@ -486,6 +488,7 @@
         date: String(item.date || ''),
         isOpen: Boolean(item.isOpen),
         sharedIntro: item.sharedIntro && typeof item.sharedIntro === 'object' ? item.sharedIntro : null,
+        pulledBy: Array.isArray(item.pulledBy) ? item.pulledBy.map((name) => String(name || '').trim()).filter(Boolean) : [],
         songs: Array.isArray(item.songs) ? item.songs.filter((song) => song && typeof song.id === 'string').map((song, index) => ({ ...song, entryId: String(song.entryId || `entry_legacy_${item.id}_${index}`), contentHtml: String(song.contentHtml || ''), overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : []
       })) : [];
       activeScheduleId = localStorage.getItem(ACTIVE_SCHEDULE_KEY) || '';
@@ -612,7 +615,29 @@
     const cardCountdown = scheduleList.querySelector(`[data-schedule-share-countdown="${CSS.escape(activeScheduleShare.scheduleId)}"]`);
     if (cardCountdown) cardCountdown.textContent = countdown;
     renderShareButtonState();
+    if (remaining && Date.now() - lastSharePullerSyncAt >= 5000) syncSchedulePullers();
     if (!remaining) stopSharing(true);
+  }
+
+  async function syncSchedulePullers() {
+    if (!activeScheduleShare || sharePullerSyncInFlight) return;
+    sharePullerSyncInFlight = true;
+    lastSharePullerSyncAt = Date.now();
+    try {
+      const result = await callScheduleApi('getScheduleShareStatus', { code: activeScheduleShare.code });
+      const schedule = schedules.find((item) => item.id === activeScheduleShare.scheduleId);
+      const pulledBy = Array.isArray(result.pulledBy) ? result.pulledBy.map((name) => String(name || '').trim()).filter(Boolean) : [];
+      if (schedule && JSON.stringify(schedule.pulledBy || []) !== JSON.stringify(pulledBy)) {
+        schedule.pulledBy = pulledBy;
+        saveSchedules();
+        renderSchedules();
+      }
+    } catch (error) {
+      // Status penerima bersifat tambahan; jangan mengganggu jadwal yang sedang dibagikan.
+      console.warn('Status penarik jadwal tidak dapat disinkronkan:', error);
+    } finally {
+      sharePullerSyncInFlight = false;
+    }
   }
 
   function formatShareCountdown(totalSeconds) {
@@ -677,6 +702,7 @@
       const sharedByName = String(profileUserNameInput.value || preferredUserName || '').trim();
       if (!sharedByName) {
         document.getElementById('share-status').textContent = 'Simpan nama pengguna di Profile sebelum membagikan jadwal.';
+        openRequiredProfile();
         return;
       }
       const durationMinutes = Number(document.getElementById('share-duration-select').value) || 15;
@@ -690,6 +716,8 @@
       document.getElementById('share-result').hidden = false;
       document.getElementById('share-status').textContent = 'Bagikan kode ini kepada penerima.';
       activeScheduleShare = { scheduleId: schedule.id, code: result.code, expiresAt: Number(result.expiresAt) };
+      schedule.pulledBy = [];
+      saveSchedules();
       shareExpiresAt = activeScheduleShare.expiresAt;
       persistActiveScheduleShare();
       window.clearInterval(shareTimer);
@@ -697,6 +725,7 @@
       renderShareButtonState();
       renderSchedules();
       updateShareCountdown();
+      syncSchedulePullers();
       shareTimer = window.setInterval(updateShareCountdown, 1000);
     } catch (error) {
       document.getElementById('share-status').textContent = error.message;
@@ -716,6 +745,7 @@
     document.getElementById('share-schedule-submit').disabled = true;
     renderShareButtonState();
     updateShareCountdown();
+    syncSchedulePullers();
     shareTimer = window.setInterval(updateShareCountdown, 1000);
   }
 
@@ -723,11 +753,17 @@
     const code = document.getElementById('pull-schedule-code').value.trim().toUpperCase();
     const statusEl = document.getElementById('pull-status');
     if (!/^[A-Z0-9]{3}$/.test(code)) { statusEl.textContent = 'Masukkan kode 3 karakter yang valid.'; return; }
+    const pullerName = readProfileUserName();
+    if (!pullerName) {
+      statusEl.textContent = 'Simpan nama pengguna di Profile sebelum menarik jadwal.';
+      openRequiredProfile();
+      return;
+    }
     const button = document.getElementById('pull-schedule-submit');
     button.disabled = true;
     statusEl.textContent = 'Mengambil jadwal…';
     try {
-      const result = await callScheduleApi('pullSchedule', { code });
+      const result = await callScheduleApi('pullSchedule', { code, pullerName });
       const received = result.schedule;
       const rawSharerName = String(received.sharedByName || '').trim() || 'Pengguna';
       const sharerName = `${rawSharerName.charAt(0).toLocaleUpperCase('id')}${rawSharerName.slice(1)}`;
@@ -766,17 +802,26 @@
       const shareCountdown = activeScheduleShare && activeScheduleShare.scheduleId === schedule.id && activeScheduleShare.expiresAt > Date.now()
         ? `<div class="schedule-share-status"><span>Jadwal dibagikan · kode ${escapeText(activeScheduleShare.code)}</span><strong data-schedule-share-countdown="${escapeText(schedule.id)}">${formatShareCountdown(Math.max(0, Math.ceil((activeScheduleShare.expiresAt - Date.now()) / 1000)))}</strong></div>`
         : '';
+      const pulledBy = formatSchedulePullers(schedule.pulledBy);
       card.innerHTML = `
         <label class="active-schedule-choice"><input type="radio" name="active-worship-schedule" value="${escapeText(schedule.id)}" ${schedule.id === activeScheduleId ? 'checked' : ''}><span>${schedule.id === activeScheduleId ? 'Aktif' : 'Tidak Aktif'}</span></label>
         <div class="schedule-card-header">
           <label class="schedule-field">NAMA JADWAL<input class="schedule-title-input" data-field="title" type="text" maxlength="80" value="${escapeText(schedule.title)}" placeholder="Contoh: Ibadah Minggu Pagi"></label>
-          <label class="schedule-field">TANGGAL<span class="schedule-date-control"><span class="schedule-date-display">${escapeText(formatWorshipDate(schedule.date) || 'Pilih tanggal')}</span><input data-field="date" type="date" value="${escapeText(schedule.date)}" aria-label="Tanggal ibadah"></span></label>
+          <label class="schedule-field">TANGGAL<span class="schedule-date-control"><span class="schedule-date-display">${escapeText(formatWorshipDate(schedule.date) || 'Pilih tanggal')}</span><input data-field="date" type="date" value="${escapeText(schedule.date)}" aria-label="Tanggal ibadah"></span>${pulledBy ? `<span class="schedule-pullers">${escapeText(pulledBy)}</span>` : ''}</label>
           <button class="schedule-view-button" type="button" data-action="view-schedule">Lihat jadwal</button>
         </div>${shareCountdown}`;
       fragment.append(card);
     });
     scheduleList.append(fragment);
     scheduleStatus.textContent = `${schedules.length} jadwal tersimpan di perangkat ini.`;
+  }
+
+  function formatSchedulePullers(names) {
+    const values = Array.isArray(names) ? names.map((name) => String(name || '').trim()).filter(Boolean) : [];
+    if (!values.length) return '';
+    if (values.length === 1) return `${values[0]} sudah menarik data.`;
+    if (values.length === 2) return `${values[0]} dan ${values[1]} sudah menarik data.`;
+    return `${values.slice(0, -1).join(', ')}, dan ${values[values.length - 1]} sudah menarik data.`;
   }
 
   function renderScheduleView(scheduleId) {
@@ -2122,6 +2167,12 @@
       if (item === instrumentProfileButton && selected) prepareInstrumentProfileOptions();
     });
   }
+
+  function openRequiredProfile() {
+    activateLibraryTab(instrumentProfileButton);
+    instrumentFilterStatus.textContent = 'Nama pengguna wajib diisi sebelum menggunakan fitur berbagi jadwal.';
+    window.setTimeout(() => profileUserNameInput.focus(), 0);
+  }
   libraryTabs.addEventListener('click', (event) => {
     const tab = event.target.closest('[role="tab"]');
     if (tab) activateLibraryTab(tab);
@@ -2425,9 +2476,15 @@
   function openGeneralSongScoreAt(index, pageIndex = 0) {
     const song = currentPreviewSongs[index];
     const instrument = findDefaultScoreInstrument(song);
-    if (!song || !instrument) return;
+    if (!song) return;
     openSong(song, currentPreviewSongs, index, dialog.open);
     introGeneralSongIndex = index;
+    // Follow the schedule order exactly. A song without a score returns the
+    // reader to its lyric/chord preview instead of being skipped.
+    if (!instrument) {
+      scoreImageDialog.close();
+      return;
+    }
     activeScheduleIntro = song.scheduleIntro || activeScheduleIntro;
     scoreImageMode = 'score';
     activeScoreInstrument = instrument;
@@ -2608,18 +2665,14 @@
 
   function findNextGeneralSongIndex() {
     const startIndex = introGeneralSongIndex >= 0 ? introGeneralSongIndex : currentSongIndex;
-    for (let index = startIndex + 1; index < currentPreviewSongs.length; index += 1) {
-      if (findDefaultScoreInstrument(currentPreviewSongs[index])) return index;
-    }
-    return -1;
+    const nextIndex = startIndex + 1;
+    return nextIndex < currentPreviewSongs.length ? nextIndex : -1;
   }
 
   function findPreviousGeneralSongIndex() {
     const startIndex = introGeneralSongIndex >= 0 ? introGeneralSongIndex : currentSongIndex;
-    for (let index = startIndex - 1; index >= 0; index -= 1) {
-      if (findDefaultScoreInstrument(currentPreviewSongs[index])) return index;
-    }
-    return -1;
+    const previousIndex = startIndex - 1;
+    return previousIndex >= 0 ? previousIndex : -1;
   }
 
   function updateGeneralSongPosition() {
@@ -2632,7 +2685,7 @@
     }
     const isPreWorship = Boolean(song.preWorship);
     const matchingSongIndexes = currentPreviewSongs.reduce((indexes, item, index) => {
-      if (Boolean(item.preWorship) === isPreWorship && findDefaultScoreInstrument(item)) indexes.push(index);
+      if (Boolean(item.preWorship) === isPreWorship) indexes.push(index);
       return indexes;
     }, []);
     const position = matchingSongIndexes.indexOf(songIndex) + 1;
@@ -2848,6 +2901,16 @@
 
   function transformChordLines(fragment, mode, fromKey, toKey) {
     fragment.querySelectorAll('.song-section-body').forEach((body) => {
+      if (mode === 'none') {
+        // Chords are stored as their own lines. Remove those lines entirely so
+        // the lyric lines close up instead of leaving empty chord rows behind.
+        const lyricLines = body.textContent.split(/\r?\n/).filter((line) => {
+          const tokens = line.trim().split(/\s+/).filter(Boolean);
+          return !tokens.length || !tokens.every((token) => parseNumberChord(token) || parseLetterChord(token));
+        });
+        body.textContent = lyricLines.join('\n');
+        return;
+      }
       const lines = body.textContent.split(/(\r?\n)/);
       const rendered = document.createDocumentFragment();
       lines.forEach((line) => {
@@ -3203,6 +3266,7 @@
   loadSchedules();
   renderSchedules();
   restoreActiveScheduleShare();
+  if (!preferredUserName) openRequiredProfile();
   const hasCache = loadCachedSongs();
   if (!hasCache) {
     count.textContent = '0';
