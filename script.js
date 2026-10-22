@@ -111,6 +111,7 @@
   let cacheAvailable = false;
   let isLoadingSongs = false;
   let schedules = [];
+  let scheduleTitleBeforeEdit = null;
   let activeScheduleId = '';
   let draggedRow = null;
   let dragPointerId = null;
@@ -210,6 +211,9 @@
   function readProfileUserName() {
     try { return String(localStorage.getItem(PROFILE_USER_NAME_KEY) || '').trim(); }
     catch (error) { return ''; }
+  }
+  function trackSuccessfulAction(event, details = {}) {
+    window.dispatchEvent(new CustomEvent('songbook:analytics', { detail: { event, ...details } }));
   }
   function initializeThemePreferences() {
     let mode = 'light';
@@ -702,7 +706,7 @@
       const sharedByName = String(profileUserNameInput.value || preferredUserName || '').trim();
       if (!sharedByName) {
         document.getElementById('share-status').textContent = 'Simpan nama pengguna di Profile sebelum membagikan jadwal.';
-        openRequiredProfile();
+        openRequiredProfile('membagikan jadwal');
         return;
       }
       const durationMinutes = Number(document.getElementById('share-duration-select').value) || 15;
@@ -727,6 +731,7 @@
       updateShareCountdown();
       syncSchedulePullers();
       shareTimer = window.setInterval(updateShareCountdown, 1000);
+      trackSuccessfulAction('schedule_share_success', { scheduleName: schedule.title || 'Jadwal tanpa nama' });
     } catch (error) {
       document.getElementById('share-status').textContent = error.message;
     } finally { button.disabled = Boolean(activeScheduleShare && activeScheduleShare.expiresAt > Date.now()); }
@@ -756,7 +761,7 @@
     const pullerName = readProfileUserName();
     if (!pullerName) {
       statusEl.textContent = 'Simpan nama pengguna di Profile sebelum menarik jadwal.';
-      openRequiredProfile();
+      openRequiredProfile('menarik jadwal');
       return;
     }
     const button = document.getElementById('pull-schedule-submit');
@@ -771,12 +776,13 @@
       const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
       schedules.unshift(imported);
       activeScheduleId = imported.id;
-      saveSchedules();
+      const saved = saveSchedules();
       renderSchedules();
       renderList();
       document.getElementById('pull-schedule-code').value = '';
       pullDialog.close();
       highlightNewSchedule(imported.id);
+      if (saved) trackSuccessfulAction('schedule_pull_success', { scheduleName: imported.title });
     } catch (error) { statusEl.textContent = error.message; }
     finally { button.disabled = false; }
   }
@@ -1124,7 +1130,7 @@
     const schedule = { id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: 'Ibadah Baru', date, songs: [] };
     schedules.unshift(schedule);
     activeScheduleId = schedule.id;
-    saveSchedules();
+    if (saveSchedules()) trackSuccessfulAction('schedule_create_success', { scheduleName: schedule.title });
     renderSchedules();
     renderList();
     highlightNewSchedule(schedule.id);
@@ -1147,7 +1153,10 @@
     if (!currentSchedule) return;
     currentSchedule.songs.push(createScheduledEntry(song));
     currentSchedule.isOpen = true;
-    saveSchedules();
+    if (saveSchedules()) trackSuccessfulAction('song_add_to_schedule_success', {
+      scheduleName: currentSchedule.title || 'Jadwal tanpa nama',
+      songTitle: song.title || '', songCategory: song.category || '', songNumber: song.number || ''
+    });
     renderSchedules();
     scheduleStatus.textContent = `${song.title} ditambahkan ke "${currentSchedule.title || 'Jadwal tanpa nama'}".`;
   }
@@ -1427,7 +1436,11 @@
       tempo: scheduleEditForm.elements.tempo.value.trim(),
       contentHtml: editableTextToHtml(scheduleContentInput.value)
     };
-    saveSchedules();
+    const saved = saveSchedules();
+    if (saved) trackSuccessfulAction('song_edit_success', {
+      songTitle: entry.overrides.title || entry.title || '', songCategory: entry.category || '', songNumber: entry.overrides.number || entry.number || '',
+      scheduleName: schedule.title || 'Jadwal tanpa nama'
+    });
     renderSchedules();
     if (scheduleViewDialog.open) renderScheduleView(editingEntry.scheduleId);
     scheduleEditDialog.close();
@@ -2008,6 +2021,7 @@
     if (!mySongForm.reportValidity()) return;
     const statusEl = document.getElementById('my-song-form-status');
     const submit = document.getElementById('save-my-song');
+    const wasEditing = Boolean(editingMySongId);
     submit.disabled = true;
     statusEl.textContent = 'Menyimpan di perangkat ini…';
     try {
@@ -2057,6 +2071,9 @@
         request.onerror = () => reject(request.error);
       });
       db.close();
+      trackSuccessfulAction(wasEditing ? 'song_edit_success' : 'song_create_success', {
+        songTitle: localSong.title, songCategory: localSong.category, songNumber: localSong.number
+      });
       const oldIndex = mySongs.findIndex((item) => item.id === localSong.id);
       if (oldIndex >= 0) mySongs.splice(oldIndex, 1, localSong);
       else mySongs.push(localSong);
@@ -2133,6 +2150,10 @@
   }
 
   document.getElementById('add-my-song').addEventListener('click', () => {
+    if (!readProfileUserName()) {
+      openRequiredProfile('menambahkan lagu baru');
+      return;
+    }
     editingMySongId = '';
     editingMySong = null;
     mySongForm.reset();
@@ -2168,9 +2189,9 @@
     });
   }
 
-  function openRequiredProfile() {
+  function openRequiredProfile(action = 'melanjutkan') {
     activateLibraryTab(instrumentProfileButton);
-    instrumentFilterStatus.textContent = 'Nama pengguna wajib diisi sebelum menggunakan fitur berbagi jadwal.';
+    instrumentFilterStatus.textContent = `Nama pengguna belum diisi. Isi dan simpan nama di sini sebelum ${action}.`;
     window.setTimeout(() => profileUserNameInput.focus(), 0);
   }
   libraryTabs.addEventListener('click', (event) => {
@@ -3073,7 +3094,13 @@
   scorePages.addEventListener('scroll', updateScoreCarouselControls, { passive: true });
   document.getElementById('score-previous').addEventListener('click', () => moveScorePage(-1));
   document.getElementById('score-next').addEventListener('click', () => moveScorePage(1));
-  refreshButton.addEventListener('click', loadSongs);
+  refreshButton.addEventListener('click', () => {
+    if (!readProfileUserName()) {
+      openRequiredProfile('memperbarui koleksi lagu');
+      return;
+    }
+    loadSongs();
+  });
   const aboutProgramDialog = document.getElementById('about-program-dialog');
   document.getElementById('about-program-open').addEventListener('click', () => aboutProgramDialog.showModal());
   document.getElementById('close-about-program').addEventListener('click', () => aboutProgramDialog.close());
@@ -3249,6 +3276,20 @@
   deleteScheduleDialog.addEventListener('close', () => { pendingScheduleDeletionId = ''; });
   songList.addEventListener('click', handleCollectionClick);
   scheduleList.addEventListener('change', handleActiveScheduleChange);
+  scheduleList.addEventListener('focusin', (event) => {
+    const titleInput = event.target.closest('input.schedule-title-input');
+    const schedule = titleInput && schedules.find((item) => item.id === titleInput.closest('.schedule-card')?.dataset.scheduleId);
+    scheduleTitleBeforeEdit = schedule ? schedule.title || '' : null;
+  });
+  scheduleList.addEventListener('change', (event) => {
+    const titleInput = event.target.closest('input.schedule-title-input');
+    if (!titleInput || scheduleTitleBeforeEdit === null) return;
+    const schedule = schedules.find((item) => item.id === titleInput.closest('.schedule-card')?.dataset.scheduleId);
+    const previousName = scheduleTitleBeforeEdit;
+    scheduleTitleBeforeEdit = null;
+    if (!schedule || schedule.title === previousName) return;
+    if (saveSchedules()) trackSuccessfulAction('schedule_rename_success', { previousName, scheduleName: schedule.title });
+  });
   search.addEventListener('input', handleSearchInput);
   scheduleList.addEventListener('pointerdown', handleScheduleDragStart);
   scheduleList.addEventListener('pointermove', handleScheduleDragMove);
