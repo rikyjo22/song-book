@@ -2847,7 +2847,12 @@
 
   function parseLetterChord(token) {
     const match = token.match(/^([A-G])([#b]?)([^/]*)(?:\/([A-G][#b]?))?$/i);
-    return match ? { root: `${match[1].toUpperCase()}${match[2]}`, quality: match[3], bass: match[4] || '' } : null;
+    if (!match) return null;
+    const quality = match[3];
+    // Do not treat ordinary words beginning with A-G as chords (for example,
+    // "Belum", "ada", and "data" in empty-state messages).
+    if (quality && !/^(?:(?:maj|min|m|sus|dim|aug|add|omit)?(?:2|4|5|6|7|9|11|13)?(?:sus[24])?(?:\([#b]?\d+\))?(?:[#b]?\d+)*)$/i.test(quality)) return null;
+    return { root: `${match[1].toUpperCase()}${match[2]}`, quality, bass: match[4] || '' };
   }
 
   function degreePitch(degree, key, accidental = '') {
