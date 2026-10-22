@@ -145,6 +145,11 @@
 
   const instrumentProfileButton = document.getElementById('instrument-filter-open');
   const profileSaveButton = document.getElementById('apply-instrument-filter');
+  const requiredProfileDialog = document.getElementById('required-profile-dialog');
+  const requiredProfileForm = document.getElementById('required-profile-form');
+  const requiredProfileNameInput = document.getElementById('required-profile-name');
+  const requiredProfileMessage = document.getElementById('required-profile-message');
+  const requiredProfileStatus = document.getElementById('required-profile-status');
   const themeModeSelect = document.getElementById('theme-mode-select');
   const themeChoiceSelect = document.getElementById('theme-choice-select');
   const fontStyleSelect = document.getElementById('font-style-select');
@@ -162,25 +167,46 @@
   document.getElementById('refresh-instrument-filter').addEventListener('click', (event) => {
     loadInstrumentOptions(event.currentTarget);
   });
-  document.getElementById('apply-instrument-filter').addEventListener('click', () => {
-    const userName = profileUserNameInput.value.trim();
+  function saveProfile(userName = profileUserNameInput.value.trim()) {
     if (!userName) {
       instrumentFilterStatus.textContent = 'Masukkan nama pengguna untuk menyimpan Profile.';
-      profileUserNameInput.focus();
-      return;
+      requiredProfileStatus.textContent = 'Nama pengguna harus diisi.';
+      (requiredProfileDialog.open ? requiredProfileNameInput : profileUserNameInput).focus();
+      return false;
     }
     if (!saveInstrumentProfile(instrumentFilterSelect.value, userName)) {
       instrumentFilterStatus.textContent = 'Profile tidak dapat disimpan di perangkat ini.';
-      return;
+      requiredProfileStatus.textContent = 'Nama pengguna tidak dapat disimpan. Periksa penyimpanan perangkat lalu coba lagi.';
+      return false;
     }
+    profileUserNameInput.value = userName;
     window.clearTimeout(profileSaveFeedbackTimer);
     profileSaveButton.textContent = 'Tersimpan ✓';
     profileSaveButton.classList.add('is-saved');
     instrumentFilterStatus.textContent = 'Profile berhasil disimpan di perangkat ini.';
+    requiredProfileStatus.textContent = '';
+    if (requiredProfileDialog.open) requiredProfileDialog.close();
     profileSaveFeedbackTimer = window.setTimeout(() => {
       profileSaveButton.textContent = 'Simpan Profile';
       profileSaveButton.classList.remove('is-saved');
     }, 2500);
+    return true;
+  }
+  profileSaveButton.addEventListener('click', () => saveProfile());
+  requiredProfileForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const userName = requiredProfileNameInput.value.trim();
+    if (!userName) {
+      requiredProfileStatus.textContent = 'Nama pengguna harus diisi.';
+      requiredProfileNameInput.focus();
+      return;
+    }
+    profileUserNameInput.value = userName;
+    saveProfile(userName);
+  });
+  requiredProfileDialog.addEventListener('cancel', (event) => event.preventDefault());
+  requiredProfileDialog.addEventListener('click', (event) => {
+    if (event.target === requiredProfileDialog) event.preventDefault();
   });
   function setStatus(message) { status.textContent = message; }
   function setSyncStatus(message) { syncStatus.textContent = message; }
@@ -2192,7 +2218,11 @@
   function openRequiredProfile(action = 'melanjutkan') {
     activateLibraryTab(instrumentProfileButton);
     instrumentFilterStatus.textContent = `Nama pengguna belum diisi. Isi dan simpan nama di sini sebelum ${action}.`;
-    window.setTimeout(() => profileUserNameInput.focus(), 0);
+    requiredProfileMessage.textContent = `Nama pengguna wajib diisi sebelum ${action}. Simpan nama untuk melanjutkan.`;
+    requiredProfileNameInput.value = profileUserNameInput.value.trim();
+    requiredProfileStatus.textContent = '';
+    if (!requiredProfileDialog.open) requiredProfileDialog.showModal();
+    window.setTimeout(() => requiredProfileNameInput.focus(), 0);
   }
   libraryTabs.addEventListener('click', (event) => {
     const tab = event.target.closest('[role="tab"]');

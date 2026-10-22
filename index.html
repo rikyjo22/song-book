@@ -16,8 +16,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=stacked-song-actions-1">
-  <script defer src="analytics.js?v=6"></script>
-  <script defer src="script.js?v=profile-gate-1"></script>
+  <script defer src="analytics.js?v=7"></script>
+  <script defer src="script.js?v=required-profile-modal-1"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -99,6 +99,20 @@
     <dialog id="schedule-share-dialog" class="schedule-view-dialog share-dialog"><section class="schedule-view-frame share-frame"><header class="schedule-view-header"><div><p class="eyebrow">BERBAGI JADWAL</p><h2>Bagikan jadwal ibadah</h2></div><button class="close-button" type="button" data-close-share aria-label="Tutup">&#215;</button></header><div class="share-body"><label class="schedule-field">PILIH JADWAL<select id="share-schedule-select" class="share-select" hidden></select><details id="share-schedule-picker" class="share-schedule-picker"><summary id="share-schedule-picker-label">Pilih jadwal</summary><div id="share-schedule-options" class="share-schedule-options" role="listbox" aria-label="Pilih jadwal"></div></details></label><label class="schedule-field" for="share-duration-select">DURASI BERBAGI<select id="share-duration-select" class="share-select"><option value="5">5 menit</option><option value="15" selected>15 menit</option><option value="30">30 menit</option><option value="60">1 jam</option><option value="120">2 jam</option><option value="300">5 jam</option></select></label><button id="share-schedule-submit" class="create-schedule-button" type="button">Bagikan</button><div id="share-result" class="share-result" hidden><p>Kode untuk menarik jadwal</p><strong id="share-code"></strong><p>Sisa waktu: <strong id="share-countdown">00:15:00</strong></p><div class="share-result-actions"><button id="minimize-share-dialog" class="schedule-refresh-songs" type="button">Minimalkan</button><button id="stop-sharing" class="schedule-delete" type="button">Berhenti bagikan</button></div></div><p id="share-status" class="share-status" role="status" aria-live="polite"></p></div></section></dialog>
     <dialog id="schedule-pull-dialog" class="schedule-view-dialog share-dialog"><section class="schedule-view-frame share-frame"><header class="schedule-view-header"><div><p class="eyebrow">TARIK JADWAL</p><h2>Masukkan kode jadwal</h2></div><button class="close-button" type="button" data-close-pull aria-label="Tutup">&#215;</button></header><div class="share-body"><label class="schedule-field">KODE 3 KARAKTER<input id="pull-schedule-code" class="share-select" type="text" maxlength="3" autocomplete="off" placeholder="ABC"></label><button id="pull-schedule-submit" class="create-schedule-button" type="button">Tarik jadwal</button><p id="pull-status" class="share-status" role="status" aria-live="polite"></p></div></section></dialog>    <footer class="footer-note"><span class="footer-credit"><img src="./icons/lagu-rohani-192.png" alt=""><span class="footer-app-name">PSALLO New Gen</span></span></footer>
   </main>
+
+  <dialog id="required-profile-dialog" class="required-profile-dialog" aria-labelledby="required-profile-title" aria-describedby="required-profile-message">
+    <section class="required-profile-card">
+      <p class="eyebrow">PENGATURAN WAJIB</p>
+      <h2 id="required-profile-title">Isi nama pengguna</h2>
+      <p id="required-profile-message">Nama pengguna perlu disimpan sebelum menggunakan Songbook.</p>
+      <form id="required-profile-form">
+        <label for="required-profile-name">Nama pengguna</label>
+        <input id="required-profile-name" type="text" maxlength="80" autocomplete="nickname" placeholder="Masukkan nama pengguna" required>
+        <p id="required-profile-status" class="required-profile-status" role="status" aria-live="polite"></p>
+        <button class="create-schedule-button" type="submit">Simpan dan lanjutkan</button>
+      </form>
+    </section>
+  </dialog>
 
   <dialog id="song-dialog" class="song-dialog" aria-labelledby="dialog-title">
     <div class="dialog-frame">
