@@ -1766,7 +1766,6 @@
   document.getElementById('close-my-song-upload-access').addEventListener('click', () => mySongUploadAccessDialog.close());
   document.getElementById('close-my-song-upload-success').addEventListener('click', () => document.getElementById('my-song-upload-success-dialog').close());
   document.getElementById('dismiss-my-song-upload-success').addEventListener('click', () => document.getElementById('my-song-upload-success-dialog').close());
-  mySongUploadAccessDialog.addEventListener('click', (event) => { if (event.target === mySongUploadAccessDialog) mySongUploadAccessDialog.close(); });
   mySongUploadAccessCode.addEventListener('input', (event) => {
     event.target.value = event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
   });
@@ -2196,11 +2195,9 @@
   document.getElementById('my-song-image-preview').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
   document.getElementById('add-my-song-instrument').addEventListener('click', () => addMySongInstrument());
   mySongForm.addEventListener('submit', saveMySong);
-  mySongDialog.addEventListener('click', (event) => { if (event.target === mySongDialog) mySongDialog.close(); });
   document.getElementById('confirm-delete-my-song').addEventListener('click', () => finishMySongDeletion(true));
   document.getElementById('cancel-delete-my-song').addEventListener('click', () => finishMySongDeletion(false));
   document.getElementById('close-delete-my-song').addEventListener('click', () => finishMySongDeletion(false));
-  deleteMySongDialog.addEventListener('click', (event) => { if (event.target === deleteMySongDialog) finishMySongDeletion(false); });
   deleteMySongDialog.addEventListener('close', () => { pendingMySongDeleteId = ''; });
   mySongsList.addEventListener('click', handleMySongListClick);
   const libraryTabs = document.querySelector('.library-tabs');
@@ -3260,7 +3257,6 @@
   });
   document.getElementById('close-schedule-intro-camera').addEventListener('click', () => scheduleIntroCameraDialog.close());
   scheduleIntroCameraDialog.addEventListener('close', stopScheduleIntroCamera);
-  scheduleIntroCameraDialog.addEventListener('click', (event) => { if (event.target === scheduleIntroCameraDialog) scheduleIntroCameraDialog.close(); });
   document.getElementById('take-schedule-intro-photo').addEventListener('click', () => {
     const video = scheduleIntroCameraPreview;
     if (!video.videoWidth || !video.videoHeight) {
@@ -3285,14 +3281,12 @@
     }, 'image/jpeg', 0.88);
   });
   scheduleIntroForm.addEventListener('submit', saveScheduleIntro);
-  scheduleIntroDialog.addEventListener('click', (event) => { if (event.target === scheduleIntroDialog) scheduleIntroDialog.close(); });
   document.getElementById('confirm-remove-schedule-intro').addEventListener('click', () => finishIntroRemovalConfirmation(true));
   document.getElementById('cancel-remove-schedule-intro').addEventListener('click', () => finishIntroRemovalConfirmation(false));
   document.getElementById('close-remove-schedule-intro').addEventListener('click', () => finishIntroRemovalConfirmation(false));
   removeScheduleIntroDialog.addEventListener('close', () => {
     if (resolveIntroRemovalConfirmation) finishIntroRemovalConfirmation(false);
   });
-  scheduleViewDialog.addEventListener('click', (event) => { if (event.target === scheduleViewDialog) scheduleViewDialog.close(); });
   document.getElementById('delete-viewed-schedule').addEventListener('click', () => {
     const schedule = schedules.find((item) => item.id === viewedScheduleId);
     confirmScheduleDeletion(schedule);
@@ -3300,9 +3294,6 @@
   document.getElementById('confirm-delete-schedule').addEventListener('click', () => finishScheduleDeletion(true));
   document.getElementById('cancel-delete-schedule').addEventListener('click', () => finishScheduleDeletion(false));
   document.getElementById('close-delete-schedule').addEventListener('click', () => finishScheduleDeletion(false));
-  deleteScheduleDialog.addEventListener('click', (event) => {
-    if (event.target === deleteScheduleDialog) finishScheduleDeletion(false);
-  });
   deleteScheduleDialog.addEventListener('close', () => { pendingScheduleDeletionId = ''; });
   songList.addEventListener('click', handleCollectionClick);
   scheduleList.addEventListener('change', handleActiveScheduleChange);
