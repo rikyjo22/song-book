@@ -15,9 +15,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=stacked-song-actions-1">
+  <link rel="stylesheet" href="style.css?v=schedule-date-picker-3">
   <script defer src="analytics.js?v=7"></script>
-  <script defer src="script.js?v=first-name-analytics-1"></script>
+  <script defer src="script.js?v=schedule-date-picker-3"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -113,6 +113,14 @@
       </form>
     </section>
   </dialog>
+  <div id="schedule-date-picker" class="schedule-date-picker" role="dialog" aria-modal="true" aria-labelledby="schedule-date-picker-title" hidden>
+    <section class="schedule-date-picker-card">
+      <header class="schedule-date-picker-heading"><button id="schedule-date-previous" type="button" aria-label="Bulan sebelumnya">&#8249;</button><h2 id="schedule-date-picker-title"></h2><button id="schedule-date-next" type="button" aria-label="Bulan berikutnya">&#8250;</button></header>
+      <div class="schedule-date-weekdays" aria-hidden="true"><span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span></div>
+      <div id="schedule-date-days" class="schedule-date-days"></div>
+      <button id="schedule-date-cancel" class="schedule-date-cancel" type="button">Batal</button>
+    </section>
+  </div>
 
   <dialog id="song-dialog" class="song-dialog" aria-labelledby="dialog-title">
     <div class="dialog-frame">

@@ -15,6 +15,8 @@
   const THEME_CHOICE_KEY = 'song-book:theme-choice:v1';
   const FONT_STYLE_KEY = 'song-book:font-style:v1';
   const FONT_SIZE_KEY = 'song-book:font-size:v1';
+  // Use the same picker in every browser; native date controls differ widely.
+  const DATE_INPUT_TYPE = 'text';
   const CATEGORIES = [
     { code: 'ALL', label: 'Semua' }, { code: 'PS', label: 'Psallo' },
     { code: 'NR', label: 'Nyanyian Rohani' }, { code: 'SP', label: 'Tambahan' },
@@ -150,6 +152,11 @@
   const requiredProfileNameInput = document.getElementById('required-profile-name');
   const requiredProfileMessage = document.getElementById('required-profile-message');
   const requiredProfileStatus = document.getElementById('required-profile-status');
+  const scheduleDatePicker = document.getElementById('schedule-date-picker');
+  const scheduleDatePickerTitle = document.getElementById('schedule-date-picker-title');
+  const scheduleDateDays = document.getElementById('schedule-date-days');
+  let scheduleDatePickerScheduleId = '';
+  let scheduleDatePickerMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
   const themeModeSelect = document.getElementById('theme-mode-select');
   const themeChoiceSelect = document.getElementById('theme-choice-select');
   const fontStyleSelect = document.getElementById('font-style-select');
@@ -471,10 +478,99 @@
     return `${parts.weekday} ${parts.day} ${parts.month} ${parts.year} ${parts.hour}.${parts.minute}`;
   }
 
+  function parseWorshipDate(value) {
+    const text = String(value || '').trim();
+    let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (match) return validateWorshipDate_(Number(match[1]), Number(match[2]), Number(match[3]));
+    match = text.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
+    if (!match) return '';
+    return validateWorshipDate_(Number(match[3]), Number(match[2]), Number(match[1]));
+  }
+
+  function validateWorshipDate_(year, month, day) {
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return '';
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  function fallbackDateValue(value) {
+    const isoDate = parseWorshipDate(value);
+    if (!isoDate) return '';
+    const [year, month, day] = isoDate.split('-');
+    return `${day}/${month}/${year}`;
+  }
+
+  function renderScheduleDatePicker() {
+    scheduleDatePickerTitle.textContent = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(scheduleDatePickerMonth);
+    scheduleDateDays.replaceChildren();
+    const year = scheduleDatePickerMonth.getFullYear();
+    const month = scheduleDatePickerMonth.getMonth();
+    const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const previousMonthDays = new Date(year, month, 0).getDate();
+    const selectedDate = schedules.find((item) => item.id === scheduleDatePickerScheduleId)?.date || '';
+    for (let cell = 0; cell < 42; cell += 1) {
+      const day = cell - firstWeekday + 1;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'schedule-date-day';
+      if (day < 1) {
+        button.textContent = String(previousMonthDays + day);
+        button.classList.add('is-outside-month');
+      } else if (day > daysInMonth) {
+        button.textContent = String(day - daysInMonth);
+        button.classList.add('is-outside-month');
+      } else {
+        const dateValue = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        button.textContent = String(day);
+        button.dataset.scheduleDate = dateValue;
+        if (dateValue === selectedDate) button.classList.add('is-selected');
+      }
+      scheduleDateDays.append(button);
+    }
+  }
+
+  function openScheduleDatePicker(scheduleId) {
+    const schedule = schedules.find((item) => item.id === scheduleId);
+    if (!schedule) return;
+    scheduleDatePickerScheduleId = scheduleId;
+    const parsedDate = parseWorshipDate(schedule.date);
+    const parts = parsedDate ? parsedDate.split('-').map(Number) : [new Date().getFullYear(), new Date().getMonth() + 1, new Date().getDate()];
+    scheduleDatePickerMonth = new Date(parts[0], parts[1] - 1, 1);
+    renderScheduleDatePicker();
+    scheduleDatePicker.hidden = false;
+  }
+
+  document.getElementById('schedule-date-previous').addEventListener('click', () => {
+    scheduleDatePickerMonth = new Date(scheduleDatePickerMonth.getFullYear(), scheduleDatePickerMonth.getMonth() - 1, 1);
+    renderScheduleDatePicker();
+  });
+  document.getElementById('schedule-date-next').addEventListener('click', () => {
+    scheduleDatePickerMonth = new Date(scheduleDatePickerMonth.getFullYear(), scheduleDatePickerMonth.getMonth() + 1, 1);
+    renderScheduleDatePicker();
+  });
+  scheduleDateDays.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-schedule-date]');
+    if (!button) return;
+    const schedule = schedules.find((item) => item.id === scheduleDatePickerScheduleId);
+    if (!schedule) return;
+    schedule.date = button.dataset.scheduleDate;
+    saveSchedules();
+    scheduleDatePicker.hidden = true;
+    renderSchedules();
+  });
+  document.getElementById('schedule-date-cancel').addEventListener('click', () => { scheduleDatePicker.hidden = true; });
+  scheduleDatePicker.addEventListener('click', (event) => {
+    if (event.target === scheduleDatePicker) scheduleDatePicker.hidden = true;
+  });
+
   function formatWorshipDate(value) {
     if (!value) return '';
-    const date = new Date(`${value}T00:00:00`);
-    if (Number.isNaN(date.getTime())) return String(value);
+    const isoDate = parseWorshipDate(value);
+    if (!isoDate) return String(value);
+    const [year, month, day] = isoDate.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return String(value);
     const parts = new Intl.DateTimeFormat('en-US', {
       weekday: 'long', day: 'numeric', month: 'short', year: 'numeric'
     }).formatToParts(date).reduce((result, part) => {
@@ -841,7 +937,7 @@
         <label class="active-schedule-choice"><input type="radio" name="active-worship-schedule" value="${escapeText(schedule.id)}" ${schedule.id === activeScheduleId ? 'checked' : ''}><span>${schedule.id === activeScheduleId ? 'Aktif' : 'Tidak Aktif'}</span></label>
         <div class="schedule-card-header">
           <label class="schedule-field">NAMA JADWAL<input class="schedule-title-input" data-field="title" type="text" maxlength="80" value="${escapeText(schedule.title)}" placeholder="Contoh: Ibadah Minggu Pagi"></label>
-          <label class="schedule-field">TANGGAL<span class="schedule-date-control"><span class="schedule-date-display">${escapeText(formatWorshipDate(schedule.date) || 'Pilih tanggal')}</span><input data-field="date" type="date" value="${escapeText(schedule.date)}" aria-label="Tanggal ibadah"></span>${pulledBy ? `<span class="schedule-pullers">${escapeText(pulledBy)}</span>` : ''}</label>
+          <label class="schedule-field">TANGGAL<span class="schedule-date-control${DATE_INPUT_TYPE === 'text' ? ' is-date-fallback' : ''}"><span class="schedule-date-display">${escapeText(formatWorshipDate(schedule.date) || 'Pilih tanggal')}</span><input data-field="date" type="${DATE_INPUT_TYPE}" value="${escapeText(DATE_INPUT_TYPE === 'date' ? parseWorshipDate(schedule.date) : fallbackDateValue(schedule.date))}" ${DATE_INPUT_TYPE === 'text' ? 'placeholder="DD/MM/YYYY" readonly' : ''} aria-label="Tanggal ibadah"${DATE_INPUT_TYPE === 'date' ? '' : ' title="Klik untuk memilih tanggal"'}>${DATE_INPUT_TYPE === 'text' ? `<button class="schedule-date-picker-open" type="button" data-schedule-date-picker="${escapeText(schedule.id)}" aria-label="Pilih tanggal ibadah" title="Pilih tanggal">&#128197;</button>` : ''}</span>${pulledBy ? `<span class="schedule-pullers">${escapeText(pulledBy)}</span>` : ''}</label>
           <button class="schedule-view-button" type="button" data-action="view-schedule">Lihat jadwal</button>
         </div>${shareCountdown}`;
       fragment.append(card);
@@ -1282,6 +1378,17 @@
   }
 
   function handleScheduleClick(event) {
+    const fallbackDateInput = event.target.closest('input[data-field="date"][readonly]');
+    if (fallbackDateInput) {
+      openScheduleDatePicker(fallbackDateInput.closest('.schedule-card')?.dataset.scheduleId);
+      return;
+    }
+    const datePickerButton = event.target.closest('[data-schedule-date-picker]');
+    if (datePickerButton) {
+      event.preventDefault();
+      openScheduleDatePicker(datePickerButton.dataset.scheduleDatePicker);
+      return;
+    }
     const preWorshipCheckbox = event.target.closest('input[data-action="toggle-pre-worship"]');
     const button = event.target.closest('button[data-action]');
     const card = event.target.closest('.schedule-card');
@@ -1523,10 +1630,17 @@
     if (!input || !card) return;
     const schedule = schedules.find((item) => item.id === card.dataset.scheduleId);
     if (!schedule) return;
-    schedule[input.dataset.field] = input.value;
+    schedule[input.dataset.field] = input.dataset.field === 'date'
+      ? parseWorshipDate(input.value) || schedule.date
+      : input.value;
     if (input.dataset.field === 'date') {
       const display = input.closest('.schedule-date-control')?.querySelector('.schedule-date-display');
-      if (display) display.textContent = formatWorshipDate(input.value) || 'Pilih tanggal';
+      const parsedDate = parseWorshipDate(input.value);
+      if (DATE_INPUT_TYPE === 'text') {
+        input.setCustomValidity(input.value && !parsedDate ? 'Gunakan format DD/MM/YYYY, misalnya 24/10/2026.' : '');
+        if (parsedDate) schedule.date = parsedDate;
+      }
+      if (display && DATE_INPUT_TYPE === 'date') display.textContent = formatWorshipDate(schedule.date) || 'Pilih tanggal';
     }
     saveSchedules();
     renderScheduleTargets();
