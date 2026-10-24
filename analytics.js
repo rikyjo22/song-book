@@ -3,7 +3,7 @@
 
   // Set this to the deployed Apps Script web app URL. Analytics stays inactive
   // until a URL is configured, so it cannot interfere with the songbook.
-  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbwVdFQjy-ze_9o33IJpwH6QwArRwiPcTv1ZDeN0pEhibKBCU1jIS-3NEelscOEdNt8YpA/exec';
+  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbyiRFcTqhlZty-uTjOyQBdL4AN7dM-5UTN2aXKprYgkwbyEIWZDl8fxtd2S7flGHvPlwA/exec';
   const PROFILE_KEY = 'song-book:profile-user-name:v1';
   const VISITOR_KEY = 'song-book:analytics-visitor:v1';
   const SESSION_KEY = 'song-book:analytics-session:v1';

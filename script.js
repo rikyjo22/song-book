@@ -168,6 +168,7 @@
     loadInstrumentOptions(event.currentTarget);
   });
   function saveProfile(userName = profileUserNameInput.value.trim()) {
+    const isFirstNameSave = !preferredUserName;
     if (!userName) {
       instrumentFilterStatus.textContent = 'Masukkan nama pengguna untuk menyimpan Profile.';
       requiredProfileStatus.textContent = 'Nama pengguna harus diisi.';
@@ -179,6 +180,7 @@
       requiredProfileStatus.textContent = 'Nama pengguna tidak dapat disimpan. Periksa penyimpanan perangkat lalu coba lagi.';
       return false;
     }
+    if (isFirstNameSave) trackSuccessfulAction('user_name_set_success');
     profileUserNameInput.value = userName;
     window.clearTimeout(profileSaveFeedbackTimer);
     profileSaveButton.textContent = 'Tersimpan ✓';
