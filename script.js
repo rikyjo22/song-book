@@ -3015,7 +3015,7 @@
     const quality = match[3];
     // Do not treat ordinary words beginning with A-G as chords (for example,
     // "Belum", "ada", and "data" in empty-state messages).
-    if (quality && !/^(?:(?:maj|min|m|sus|dim|aug|add|omit)?(?:2|4|5|6|7|9|11|13)?(?:sus[24])?(?:\([#b]?\d+\))?(?:[#b]?\d+)*)$/i.test(quality)) return null;
+    if (quality && !/^(?:(?:maj|min|m|sus|dim|aug|add|omit|o|M|\+)?(?:2|4|5|6|7|9|11|13)?(?:sus[24])?(?:\([#b]?\d+\))?(?:[#b]?\d+)*)$/i.test(quality)) return null;
     return { root: `${match[1].toUpperCase()}${match[2]}`, quality, bass: match[4] || '' };
   }
 
@@ -3030,7 +3030,9 @@
     const scale = scaleFor(key);
     const minor = parseKey(key).minor;
     const defaultQualities = minor ? ['m', 'dim', '', 'm', 'm', '', ''] : ['', 'm', 'm', '', '', 'm', 'dim'];
-    const quality = chord.quality || (chord.accidental ? '' : defaultQualities[chord.degree - 1]);
+    const qualityAliases = { M: 'maj', m: 'm', o: 'dim', '+': 'aug' };
+    const rawQuality = chord.quality || (chord.accidental ? '' : defaultQualities[chord.degree - 1]);
+    const quality = rawQuality.replace(/^(M|m|o|\+)/, (alias) => qualityAliases[alias] || alias);
     const root = spellScaleDegree(chord.degree, key, chord.accidental);
     const bassMatch = chord.bass.match(/^([b#]?)([1-7])$/);
     const bass = bassMatch ? `/${spellScaleDegree(Number(bassMatch[2]), key, bassMatch[1])}` : '';
@@ -3100,18 +3102,30 @@
           }
           const converted = mapChordToken(part, mode, fromKey, toKey);
           const chord = parseLetterChord(converted);
-          const extensionIndex = chord ? chord.quality.indexOf('7') : -1;
-          if (extensionIndex < 0) {
-            rendered.append(document.createTextNode(converted));
-            return;
+          const numericChord = !chord && parseNumberChord(converted);
+          if (numericChord) {
+            const suffix = numericChord.quality.match(/^(13|11|9|7|sus[24])$/)?.[0] || '';
+            if (suffix) {
+              rendered.append(document.createTextNode(`${numericChord.accidental}${numericChord.degree}`));
+              const subscript = document.createElement('sub');
+              subscript.className = 'chord-subscript';
+              subscript.textContent = suffix;
+              rendered.append(subscript, document.createTextNode(numericChord.quality.slice(suffix.length)), document.createTextNode(numericChord.bass ? `/${numericChord.bass}` : ''));
+              return;
+            }
           }
-          const qualityStart = chord.root.length;
-          const sevenIndex = qualityStart + extensionIndex;
-          rendered.append(document.createTextNode(converted.slice(0, sevenIndex)));
-          const extension = document.createElement('sup');
-          extension.className = 'chord-extension';
-          extension.textContent = '7';
-          rendered.append(extension, document.createTextNode(converted.slice(sevenIndex + 1)));
+          if (chord) {
+            const suffix = chord.quality.match(/^(13|11|9|7|sus[24])$/)?.[0] || '';
+            if (suffix) {
+              rendered.append(document.createTextNode(converted.slice(0, chord.root.length)));
+              const subscript = document.createElement('sub');
+              subscript.className = 'chord-subscript';
+              subscript.textContent = suffix;
+              rendered.append(subscript, document.createTextNode(chord.quality.slice(suffix.length)), document.createTextNode(chord.bass ? `/${chord.bass}` : ''));
+              return;
+            }
+          }
+          rendered.append(document.createTextNode(converted));
         });
       });
       body.replaceChildren(rendered);
