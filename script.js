@@ -327,7 +327,7 @@
     const callbackName = `cb_${Date.now()}_${++callbackCounter}`;
     const script = document.createElement('script');
     let settled = false;
-    const timeout = window.setTimeout(() => finish(new Error('Waktu koneksi habis. Periksa URL API dan deployment Apps Script.')), 20000);
+    const timeout = window.setTimeout(() => finish(new Error('Waktu koneksi habis. Periksa URL API dan deployment Apps Script.')), 45000);
 
     function finish(error, result) {
       if (settled) return;
@@ -343,12 +343,12 @@
         if (!cacheAvailable) setStatus(error.message || 'Gagal memuat daftar lagu.');
         return;
       }
-      if (!result || !result.ok) {
+      if (!result || !result.ok || !Array.isArray(result.songs)) {
         setSyncStatus(cacheAvailable ? 'Pembaruan gagal · menampilkan data lokal terakhir' : 'Gagal memperbarui data');
-        if (!cacheAvailable) setStatus((result && result.error) || 'Apps Script gagal mengirim daftar lagu.');
+        if (!cacheAvailable) setStatus((result && result.error) || 'Apps Script gagal mengirim daftar lagu yang valid.');
         return;
       }
-      songs = Array.isArray(result.songs) ? result.songs : [];
+      songs = result.songs;
       songs.sort(compareSongs);
       const updatedAt = new Date().toISOString();
       try {
@@ -370,6 +370,8 @@
     const url = new URL(API_URL);
     url.searchParams.set('action', 'songs');
     url.searchParams.set('callback', `SongBookCallbacks.${callbackName}`);
+    // Bypass browser/proxy caches without using Apps Script's slow `fresh=1` path.
+    url.searchParams.set('_refresh', String(Date.now()));
     script.src = url.toString();
     document.head.append(script);
   }
