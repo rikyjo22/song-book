@@ -73,7 +73,24 @@
 @media(max-width:600px){#schedule-pull-dialog{width:calc(100% - 30px);height:auto;max-height:90dvh;margin:auto;border-radius:16px}#schedule-pull-dialog .schedule-view-frame{height:auto;max-height:90dvh;border:1px solid #e5ebe4;border-radius:16px}}
 @media(max-width:600px){#delete-my-song-dialog{width:calc(100% - 30px);height:auto;max-height:90dvh;margin:auto;border-radius:16px}#delete-my-song-dialog .schedule-view-frame{height:auto;max-height:90dvh;border:1px solid #e5ebe4;border-radius:16px}#delete-my-song-dialog .schedule-view-header{padding:18px 48px 14px}#delete-my-song-dialog .schedule-view-header h2{font-size:19px}#delete-my-song-dialog .share-body{padding:0 16px 18px}#delete-my-song-dialog .intro-delete-actions{gap:9px}#delete-my-song-dialog .intro-delete-actions button{flex:1;min-width:0;min-height:42px}}
 #my-song-upload-success-dialog{width:min(calc(100% - 30px),460px);height:auto;max-height:min(82dvh,680px);margin:auto;border-radius:16px}#my-song-upload-success-dialog .schedule-view-frame{height:auto;max-height:min(82dvh,680px);min-height:0;border:1px solid #e5ebe4;border-radius:16px}#my-song-upload-success-dialog .schedule-view-header{position:relative;justify-content:center;padding:20px 52px 14px;text-align:center}#my-song-upload-success-dialog .schedule-view-header>div{width:100%}#my-song-upload-success-dialog .schedule-view-header h2{font-size:21px}#my-song-upload-success-dialog .schedule-view-header .close-button{position:absolute;top:15px;right:16px}#my-song-upload-success-dialog .share-body{min-height:0;overflow:hidden;gap:12px;padding:0 22px 20px}#my-song-upload-success-dialog .upload-success-intro{text-align:center}#my-song-upload-success-dialog .upload-success-list{width:100%;max-height:min(45dvh,360px);min-height:0;overflow:auto;padding:2px 4px 4px;overscroll-behavior:contain;scrollbar-width:thin}#my-song-upload-success-dialog .upload-success-list li{overflow-wrap:anywhere;text-align:left}#my-song-upload-success-dialog .upload-success-actions{flex:0 0 auto;justify-content:center}#my-song-upload-success-dialog .upload-success-actions .create-schedule-button{min-width:120px;min-height:40px}
+/* Keep upload requests visibly active until the server responds. */
+#my-song-upload-progress-dialog{width:min(calc(100% - 30px),380px);height:auto;margin:auto;border-radius:16px}
+#my-song-upload-progress-dialog .upload-progress-frame{height:auto;max-height:none;align-items:center;gap:12px;border:1px solid #e5ebe4;border-radius:16px;padding:28px 24px 25px;text-align:center}
+.upload-progress-frame h2{margin:0;color:#1c2c22;font:800 20px/1.25 Manrope,sans-serif;letter-spacing:-.03em}
+.upload-progress-frame p{min-height:18px;margin:0;color:#718078;font-size:12px;line-height:1.5}
+.upload-progress-spinner{width:30px;height:30px;border:3px solid #dce9dd;border-top-color:var(--green);border-radius:50%;animation:upload-progress-spin .8s linear infinite}
+.upload-progress-track{width:100%;height:7px;overflow:hidden;border-radius:999px;background:#e8eee8}
+.upload-progress-track span{display:block;width:42%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#2e7650,#71bd82);animation:upload-progress-slide 1.35s ease-in-out infinite}
+@keyframes upload-progress-spin{to{transform:rotate(360deg)}}
+@keyframes upload-progress-slide{0%{transform:translateX(-110%)}50%{transform:translateX(140%)}100%{transform:translateX(260%)}}
+:root[data-theme="dark"] #my-song-upload-progress-dialog .upload-progress-frame{border-color:var(--line);background:var(--surface);color:var(--ink)}
+:root[data-theme="dark"] .upload-progress-frame h2{color:var(--ink)}
+:root[data-theme="dark"] .upload-progress-frame p{color:var(--muted)}
+:root[data-theme="dark"] .upload-progress-spinner{border-color:var(--line);border-top-color:var(--green)}
+:root[data-theme="dark"] .upload-progress-track{background:var(--surface-soft)}
+@media(prefers-reduced-motion:reduce){.upload-progress-spinner,.upload-progress-track span{animation:none}.upload-progress-track span{width:100%;transform:none}}
 @media(max-width:600px){#my-song-upload-success-dialog{width:calc(100% - 30px);height:auto;max-height:calc(100dvh - 32px);margin:auto;border-radius:16px}#my-song-upload-success-dialog .schedule-view-frame{height:auto;max-height:calc(100dvh - 32px);border:1px solid #e5ebe4;border-radius:16px}#my-song-upload-success-dialog .schedule-view-header{padding:18px 48px 13px}#my-song-upload-success-dialog .schedule-view-header h2{font-size:19px}#my-song-upload-success-dialog .share-body{gap:10px;padding:0 15px 16px}#my-song-upload-success-dialog .upload-success-list{max-height:45dvh}#my-song-upload-success-dialog .upload-success-list li{padding:9px 10px;font-size:11px}#my-song-upload-success-dialog .upload-success-actions .create-schedule-button{width:100%}}
+@media(max-width:600px){#my-song-upload-progress-dialog{width:calc(100% - 30px);height:auto;max-height:calc(100dvh - 32px);margin:auto;border-radius:16px}#my-song-upload-progress-dialog .upload-progress-frame{height:auto;max-height:none;border:1px solid #e5ebe4;border-radius:16px;padding:25px 18px 22px}}
 #my-song-content{z-index:1!important;background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;caret-color:var(--green)!important}
 #my-song-highlight{z-index:0!important;color:var(--ink)!important;pointer-events:none}
 #my-song-highlight.is-placeholder{color:var(--ink)!important;opacity:.78}
@@ -1552,3 +1569,221 @@ button.my-song-upload-cancel[hidden]{display:none!important}
     max-width:clamp(96px,30vw,126px)!important;
   }
 }
+
+/* Category and sort controls sit below the search field in both song tabs. */
+.song-filter-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:9px;
+  width:calc(100% - 50px);
+  margin:0 25px 14px;
+}
+.song-filter-control{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr);
+  align-items:center;
+  gap:8px;
+  min-width:0;
+  color:#68776d;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+.song-filter-control select{
+  width:100%;
+  min-width:0;
+  height:40px;
+  border:1px solid #dfe7df;
+  border-radius:10px;
+  background:#fbfcfa;
+  padding:0 10px;
+  color:#405146;
+  font:600 11px "DM Sans",sans-serif;
+  outline:0;
+}
+.song-filter-control select:focus{border-color:#80af8d;box-shadow:0 0 0 3px #176b4b13}
+#category-filters,.my-songs-category-chips{display:none!important}
+.app-shell.collection-view-active #collection-results > .song-filter-row{flex:0 0 auto}
+.my-songs-search-row{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:10px!important}
+.my-songs-search-row .search-box{width:100%;margin:0!important}
+.my-songs-search-row .song-filter-row{display:grid!important;width:100%!important;margin:0!important}
+.my-songs-category-filter{display:block!important;width:100%!important;height:40px!important}
+.song-key{
+  display:inline-flex;
+  min-height:23px;
+  align-items:center;
+  border:1px solid #9fc8a8;
+  border-radius:7px;
+  background:#e0f1e4;
+  padding:3px 9px;
+  color:#176b4b;
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.02em;
+  line-height:1;
+  box-shadow:0 1px 2px #176b4b1a;
+}
+:root[data-theme="dark"] .song-filter-control select{border-color:var(--line)!important;background:var(--field-bg)!important;color:var(--ink)!important}
+:root[data-theme="dark"] .song-key{border-color:#5e9b70!important;background:#294936!important;color:#bce8c5!important;box-shadow:none!important}
+@media(max-width:600px){
+  .song-filter-row{gap:7px;width:calc(100% - 30px);margin-right:15px;margin-left:15px;margin-bottom:12px}
+  .song-filter-control{grid-template-columns:1fr;gap:4px;font-size:8px}
+  .song-filter-control select{height:39px;padding:0 8px;font-size:10px}
+  .my-songs-search-row{gap:8px!important;margin-right:15px!important;margin-left:15px!important}
+  .my-songs-category-filter{height:39px!important}
+  .song-key{min-height:22px!important;padding:3px 8px!important;font-size:10px!important}
+}
+
+/* Show the book abbreviation above the song number in library items. */
+.song-index{
+  display:flex!important;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:1px;
+  text-align:center;
+  line-height:1;
+}
+.song-index-category{
+  display:block;
+  max-width:100%;
+  overflow:hidden;
+  font-size:8px;
+  font-weight:800;
+  letter-spacing:.08em;
+  line-height:1;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.song-index-number{
+  display:block;
+  font-size:12px;
+  font-weight:800;
+  line-height:1.05;
+}
+@media(max-width:600px){
+  .song-index-category{font-size:7px}
+  .song-index-number{font-size:11px}
+}
+
+/* Slightly larger stacked book code and song number. */
+.song-index{width:46px!important;height:46px!important}
+.song-index-category{font-size:9px}
+.song-index-number{font-size:14px}
+@media(max-width:600px){
+  .song-index{width:38px!important;height:38px!important}
+  .song-index-category{font-size:8px}
+  .song-index-number{font-size:12px}
+}
+
+/* Larger stacked book code and number for easier scanning. */
+.song-index{width:54px!important;height:54px!important}
+.song-index-category{font-size:10px}
+.song-index-number{font-size:16px}
+.song-card-main{grid-template-columns:54px minmax(0,1fr) auto!important}
+.my-song-upload-choice{grid-template-columns:17px 54px minmax(0,1fr)!important}
+@media(max-width:600px){
+  .song-index{width:46px!important;height:46px!important}
+  .song-index-category{font-size:9px}
+  .song-index-number{font-size:14px}
+  .song-card-main{grid-template-columns:46px minmax(0,1fr) auto!important}
+  .my-song-upload-choice{grid-template-columns:16px 46px minmax(0,1fr)!important}
+}
+
+/* Keep key and genre badges aligned, with uploader on its own line. */
+.song-key,.song-genre{
+  display:inline-flex;
+  min-height:23px;
+  align-items:center;
+  border:1px solid #9fc8a8;
+  border-radius:7px;
+  background:#e0f1e4;
+  padding:3px 9px;
+  color:#176b4b;
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.02em;
+  line-height:1;
+}
+.song-uploader{
+  flex:0 0 100%;
+  margin-top:1px;
+  color:#829087;
+  font-size:10px;
+  font-weight:600;
+  line-height:1.2;
+}
+:root[data-theme="dark"] .song-key,
+:root[data-theme="dark"] .song-genre{
+  border-color:#5e9b70!important;
+  background:#294936!important;
+  color:#bce8c5!important;
+}
+@media(max-width:600px){
+  .song-key,.song-genre{min-height:22px;padding:3px 8px;font-size:10px}
+  .song-uploader{font-size:9px}
+}
+
+/* Genre returns to plain metadata text, with a stronger weight. */
+.song-genre{
+  display:inline;
+  min-height:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  padding:0;
+  color:#829087;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:0;
+  line-height:1.2;
+  box-shadow:none;
+}
+:root[data-theme="dark"] .song-genre{
+  border:0!important;
+  background:transparent!important;
+  color:var(--muted)!important;
+}
+@media(max-width:600px){.song-genre{font-size:9px}}
+
+.song-tempo{
+  color:#829087;
+  font-size:10px;
+  font-weight:600;
+  line-height:1.2;
+}
+:root[data-theme="dark"] .song-tempo{color:var(--muted)!important}
+@media(max-width:600px){.song-tempo{font-size:9px}}
+
+.song-subtitle{align-items:center}
+.song-creator{
+  color:#829087;
+  font-size:10px;
+  font-weight:600;
+  line-height:1.2;
+}
+:root[data-theme="dark"] .song-creator{color:var(--muted)!important}
+@media(max-width:600px){.song-creator{font-size:9px}}
+
+.song-genre{font-size:11px;font-weight:800}
+@media(max-width:600px){.song-genre{font-size:10px;font-weight:800}}
+
+.refresh-schedule-intro{
+  flex:0 0 auto;
+  min-height:29px;
+  border:0;
+  border-left:1px solid #d5e4d6;
+  background:transparent;
+  padding:4px 8px;
+  color:#176b4b;
+  font-size:9px;
+  font-weight:800;
+  line-height:1.2;
+  white-space:nowrap;
+}
+.refresh-schedule-intro:hover{background:#dcebd9}
+.refresh-schedule-intro[hidden]{display:none!important}
+:root[data-theme="dark"] .refresh-schedule-intro{border-left-color:var(--line);color:var(--green)}
+:root[data-theme="dark"] .refresh-schedule-intro:hover{background:var(--theme-tint)}
+@media(max-width:600px){.refresh-schedule-intro{min-height:27px;padding:4px 6px;font-size:8px}}

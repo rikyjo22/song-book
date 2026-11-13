@@ -2,7 +2,7 @@
   'use strict';
 
   // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbzRzDZqxwH5V8DyAOFmiuFls_9T9vbY3Rs0agmAa2NQx2eTL5MLtwhzeemx8KfaDHMNcA/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbyuMF9yUmZjUdC8pd2-YGibG42iy5RE6rq3T6fhMaDsqzvvakzZXRldh8VsopCSHnrYJQ/exec';
   const CACHE_KEY = 'song-book:songs:v1';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
@@ -12,6 +12,7 @@
   const SCHEDULE_INTRO_CACHE_KEY = 'song-book:schedule-intros:v1';
   const INSTRUMENT_PROFILE_KEY = 'song-book:instrument-profile:v1';
   const PROFILE_USER_NAME_KEY = 'song-book:profile-user-name:v1';
+  const PROFILE_USER_ID_KEY = 'song-book:profile-user-id:v1';
   const THEME_MODE_KEY = 'song-book:theme-mode:v1';
   const THEME_CHOICE_KEY = 'song-book:theme-choice:v1';
   const FONT_STYLE_KEY = 'song-book:font-style:v1';
@@ -37,6 +38,9 @@
   const clearSearchButton = document.getElementById('clear-search');
   const mySongsSearch = document.getElementById('my-songs-search');
   const mySongsCategoryFilter = document.getElementById('my-songs-category-filter');
+  const mySongsSortSelect = document.getElementById('my-songs-sort-select');
+  const collectionCategoryFilter = document.getElementById('collection-category-filter');
+  const collectionSortSelect = document.getElementById('collection-sort-select');
   const mySongsCategoryChips = document.getElementById('my-songs-category-chips');
   const mySongsList = document.getElementById('my-songs-list');
   const mySongsStatus = document.getElementById('my-songs-status');
@@ -81,6 +85,7 @@
   const deleteScheduleDialog = document.getElementById('delete-schedule-dialog');
   const deleteScheduleMessage = document.getElementById('delete-schedule-message');
   const scheduleIntroNameButton = document.getElementById('schedule-intro-name-button');
+  const refreshScheduleIntroButton = document.getElementById('refresh-schedule-intro');
   const removeScheduleIntroButton = document.getElementById('remove-schedule-intro');
   const scheduleIntroActionsGroup = document.getElementById('schedule-intro-actions-group');
   const chordModeSelect = document.getElementById('chord-mode');
@@ -105,8 +110,11 @@
   let songs = [];
   let mySongs = [];
   let activeCategory = 'ALL';
+  let collectionSort = 'number';
+  let mySongsSort = 'number';
   let preferredInstrument = readInstrumentProfile();
   let preferredUserName = readProfileUserName();
+  let preferredUserId = readProfileUserId();
   let currentSongIndex = -1;
   let currentPreviewSongs = [];
   let currentPreviewSong = null;
@@ -134,9 +142,11 @@
   let introGeneralNavigationActive = false;
   let introGeneralSongIndex = -1;
   let scheduleIntros = readScheduleIntroCache();
+  const pendingScheduleIntroUpdates = {};
   const songSectionPattern = /^(?:(?:\d+[.)]?\s*)?)(intro|opening|bait|verse|stanza|reff|refrain|chorus|pre[ -]?(?:reff|chorus)|post[ -]?(?:reff|chorus)|bridge|intermezzo|itermezzo|interlude|instrumental|music|musik|solo|coda|outro|ending|tag|vamp|reprise)(?:\s+(?:ke[- ]?)?\d+)?$/i;
   let activeScoreFiles = [];
   let activeScoreInstrument = '';
+  let scoreViewerFromList = false;
   let activeScoreIndex = 0;
   let scoreImageMode = 'score';
   let activeScheduleIntro = null;
@@ -239,13 +249,44 @@
   }
   function displaySongNumber(value) {
     const number = String(value || '').trim();
-    return /^\d+$/.test(number) ? number : '';
+    return number.match(/\d+/)?.[0] || '';
+  }
+  function displaySongBookCode(song) {
+    const value = String(song && song.category || '').trim();
+    const category = CATEGORIES.find((entry) => entry.code === value
+      || normalize(entry.label) === normalize(value));
+    if (category && category.code !== 'ALL') return category.code;
+    return value || String(song && song.number || '').trim().match(/^[A-Za-z]+/)?.[0] || '';
+  }
+  function songIndexMarkup(song) {
+    const bookCode = escapeText(displaySongBookCode(song));
+    const number = escapeText(displaySongNumber(song && song.number));
+    return `<span class="song-index">${bookCode ? `<span class="song-index-category">${bookCode}</span>` : ''}<span class="song-index-number">${number || '&#9835;'}</span></span>`;
+  }
+  function songListMetaMarkup(song) {
+    const key = song && song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : '';
+    const genre = song && song.genre
+      ? `<span class="song-genre">${key ? '&#183;&nbsp;' : ''}${escapeText(song.genre)}</span>`
+      : '';
+    const creatorValue = String(song && song.songCreator || '').trim();
+    const creator = creatorValue
+      ? `<span class="song-creator">${key || genre ? '&#183;&nbsp;' : ''}${escapeText(creatorValue)}</span>`
+      : '';
+    const tempoValue = formatTempo(song && song.tempo);
+    const tempo = tempoValue
+      ? `<span class="song-tempo">${key || genre || creator ? '&#183;&nbsp;' : ''}${escapeText(tempoValue)}</span>`
+      : '';
+    const uploaderName = String(song && song.uploader || '').trim();
+    const uploader = uploaderName && uploaderName.toLowerCase() !== 'admin'
+      ? `<span class="song-uploader">Uploader: ${escapeText(uploaderName)}</span>`
+      : '';
+    return `${key}${genre}${creator}${tempo}${uploader}`;
   }
   function displaySongTitle(song) {
     let title = String(song && song.title || '').trim();
     const category = String(song && song.category || '').trim();
     const rawNumber = String(song && song.number || '').trim();
-    if (category && rawNumber && !displaySongNumber(rawNumber)) {
+    if (rawNumber && rawNumber !== displaySongNumber(rawNumber)) {
       const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       title = title.replace(new RegExp(`^(?:${escapeRegExp(category)}\\s+)?${escapeRegExp(rawNumber)}\\s*(?:[-\\u2013\\u2014:|]\\s*|\\s+)`, 'i'), '').trim();
     }
@@ -259,6 +300,19 @@
   function readProfileUserName() {
     try { return String(localStorage.getItem(PROFILE_USER_NAME_KEY) || '').trim(); }
     catch (error) { return ''; }
+  }
+  function readProfileUserId() {
+    try {
+      let userId = String(localStorage.getItem(PROFILE_USER_ID_KEY) || '').trim();
+      if (!userId) {
+        const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID().replace(/-/g, '')
+          : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+        userId = `usr_${randomPart}`;
+        localStorage.setItem(PROFILE_USER_ID_KEY, userId);
+      }
+      return userId;
+    } catch (error) { return ''; }
   }
   function trackSuccessfulAction(event, details = {}) {
     window.dispatchEvent(new CustomEvent('songbook:analytics', { detail: { event, ...details } }));
@@ -906,7 +960,7 @@
     try {
       let intro = schedule.sharedIntro || (Object.prototype.hasOwnProperty.call(scheduleIntros, schedule.id) ? scheduleIntros[schedule.id] : undefined);
       if (intro === undefined) {
-        const introResult = await callScheduleApi('getScheduleIntro', { scheduleId: schedule.id });
+        const introResult = await callScheduleApi('getScheduleIntro', { scheduleId: schedule.id, uploaderId: preferredUserId });
         intro = introResult.intro || null;
         scheduleIntros[schedule.id] = intro;
         persistScheduleIntroCache();
@@ -1114,34 +1168,67 @@
 
   async function loadScheduleIntro(scheduleId) {
     const requestId = ++scheduleIntroRequestId;
+    if (!scheduleId || viewedScheduleId !== scheduleId) return;
     const schedule = schedules.find((item) => item.id === scheduleId);
     if (schedule && schedule.sharedIntro) {
+      delete pendingScheduleIntroUpdates[scheduleId];
       scheduleIntros[scheduleId] = schedule.sharedIntro;
-      showScheduleIntro(schedule.sharedIntro);
+      showScheduleIntro(schedule.sharedIntro, false);
       return;
     }
     const hasCachedIntro = Object.prototype.hasOwnProperty.call(scheduleIntros, scheduleId);
     const cachedIntro = hasCachedIntro ? scheduleIntros[scheduleId] : null;
-    showScheduleIntro(cachedIntro);
+    delete pendingScheduleIntroUpdates[scheduleId];
+    showScheduleIntro(cachedIntro, false);
     try {
-      const result = await callScheduleApi('getScheduleIntro', { scheduleId });
-      if (requestId !== scheduleIntroRequestId || viewedScheduleId !== scheduleId) return;
-      scheduleIntros[scheduleId] = result.intro || null;
-      persistScheduleIntroCache();
-      showScheduleIntro(result.intro || null);
+      const result = await callScheduleApi('getScheduleIntro', { scheduleId, uploaderId: preferredUserId });
+      if (requestId !== scheduleIntroRequestId || viewedScheduleId !== scheduleId || !scheduleViewDialog.open) return;
+      const latestIntro = result.intro || null;
+      const cachedUpdatedAt = introUpdatedTimestamp(cachedIntro);
+      const latestUpdatedAt = introUpdatedTimestamp(latestIntro);
+      const hasNewerIntro = Boolean(cachedIntro && latestIntro
+        && (latestUpdatedAt > cachedUpdatedAt
+          || (latestUpdatedAt > 0 && latestUpdatedAt === cachedUpdatedAt && latestIntro.fileId !== cachedIntro.fileId)));
+      const serverIsOlder = Boolean(cachedIntro && latestIntro && cachedUpdatedAt > 0
+        && latestUpdatedAt > 0 && latestUpdatedAt < cachedUpdatedAt);
+      if (hasNewerIntro) {
+        pendingScheduleIntroUpdates[scheduleId] = latestIntro;
+        showScheduleIntro(cachedIntro, true);
+        return;
+      }
+      if (serverIsOlder) {
+        showScheduleIntro(cachedIntro, false);
+        return;
+      }
+      delete pendingScheduleIntroUpdates[scheduleId];
+      if (latestIntro || !cachedIntro) {
+        scheduleIntros[scheduleId] = latestIntro;
+        persistScheduleIntroCache();
+        showScheduleIntro(latestIntro, false);
+      }
     } catch (error) {
       console.warn('Intro jadwal tidak dapat dimuat:', error);
     }
   }
 
-  function showScheduleIntro(intro) {
+  function introUpdatedTimestamp(intro) {
+    if (!intro) return 0;
+    const value = intro.updatedAt || intro.createdAt || '';
+    const parsed = Date.parse(String(value));
+    return Number.isFinite(parsed) ? parsed : Number(value) || 0;
+  }
+
+  function showScheduleIntro(intro, updateAvailable = false) {
     if (!intro) {
       scheduleIntroActionsGroup.hidden = true;
       scheduleIntroNameButton.textContent = '';
+      refreshScheduleIntroButton.hidden = true;
       return;
     }
     scheduleIntroNameButton.textContent = intro.name || 'Intro';
     scheduleIntroNameButton.setAttribute('aria-label', `Buka gambar intro ${intro.name || ''}`);
+    refreshScheduleIntroButton.hidden = !updateAvailable;
+    refreshScheduleIntroButton.title = updateAvailable ? 'Muat intro terbaru dari server' : '';
     scheduleIntroActionsGroup.hidden = false;
   }
 
@@ -1208,8 +1295,11 @@
     const file = document.getElementById('schedule-intro-file').files[0]
       || document.getElementById('schedule-intro-camera').files[0]
       || capturedScheduleIntroFile;
+    const uploader = preferredUserName || readProfileUserName();
     const statusEl = document.getElementById('schedule-intro-status');
     if (!schedule || !file) { statusEl.textContent = 'Pilih gambar intro.'; return; }
+    if (!uploader) { statusEl.textContent = 'Isi nama pengguna di Profil sebelum mengunggah intro.'; return; }
+    if (!preferredUserId) { statusEl.textContent = 'ID pengguna tidak tersedia. Periksa penyimpanan browser lalu coba lagi.'; return; }
     if (!file.type.startsWith('image/')) { statusEl.textContent = 'Pilih file gambar yang valid.'; return; }
     if (file.size > 8 * 1024 * 1024) { statusEl.textContent = 'Ukuran gambar maksimal 8 MB.'; return; }
     const submit = document.getElementById('save-schedule-intro');
@@ -1226,9 +1316,12 @@
       const result = await postScheduleApi('saveScheduleIntro', { intro: {
         scheduleId: schedule.id, name,
         scheduleName: schedule.title || 'Jadwal ibadah', scheduleDate: schedule.date || 'Tanpa tanggal',
+        uploader,
+        uploaderId: preferredUserId,
         image: { originalName: file.name, mimeType: file.type, base64 }
       } });
       scheduleIntros[schedule.id] = result;
+      delete pendingScheduleIntroUpdates[schedule.id];
       schedule.sharedIntro = null;
       persistScheduleIntroCache();
       saveSchedules();
@@ -1257,9 +1350,10 @@
         schedule.sharedIntro = null;
         saveSchedules();
       } else {
-        await postScheduleApi('deleteScheduleIntro', { scheduleId });
+        await postScheduleApi('deleteScheduleIntro', { scheduleId, uploaderId: preferredUserId });
       }
       delete scheduleIntros[scheduleId];
+      delete pendingScheduleIntroUpdates[scheduleId];
       persistScheduleIntroCache();
       scheduleIntroActionsGroup.hidden = true;
       if (scoreImageDialog.open && scoreImageMode === 'intro') scoreImageDialog.close();
@@ -1633,7 +1727,7 @@
     let intro = schedule.sharedIntro || (Object.prototype.hasOwnProperty.call(scheduleIntros, schedule.id) ? scheduleIntros[schedule.id] : undefined);
     if (intro === undefined) {
       try {
-        const result = await callScheduleApi('getScheduleIntro', { scheduleId: schedule.id });
+        const result = await callScheduleApi('getScheduleIntro', { scheduleId: schedule.id, uploaderId: preferredUserId });
         intro = result.intro || null;
         scheduleIntros[schedule.id] = intro;
         persistScheduleIntroCache();
@@ -1846,8 +1940,31 @@
     return numberOrder || String(a.title || '').localeCompare(String(b.title || ''), 'id', { sensitivity: 'base' });
   }
 
+  function compareSongNumbers(a, b) {
+    const aNumber = displaySongNumber(a.number);
+    const bNumber = displaySongNumber(b.number);
+    if (!aNumber && !bNumber) return displaySongTitle(a).localeCompare(displaySongTitle(b), 'id', { sensitivity: 'base' });
+    if (!aNumber) return 1;
+    if (!bNumber) return -1;
+    return aNumber.localeCompare(bNumber, 'id', { numeric: true, sensitivity: 'base' })
+      || displaySongTitle(a).localeCompare(displaySongTitle(b), 'id', { sensitivity: 'base' });
+  }
+
+  function compareSongTitles(a, b) {
+    return displaySongTitle(a).localeCompare(displaySongTitle(b), 'id', { sensitivity: 'base', numeric: true })
+      || compareSongNumbers(a, b);
+  }
+
+  function sortSongsForDisplay(list, mode) {
+    const sorted = [...list];
+    if (mode === 'title-asc') return sorted.sort(compareSongTitles);
+    if (mode === 'title-desc') return sorted.sort((a, b) => compareSongTitles(b, a));
+    return sorted.sort(compareSongNumbers);
+  }
+
   function buildFilters() {
     filters.replaceChildren();
+    if (collectionCategoryFilter) collectionCategoryFilter.value = activeCategory;
     CATEGORIES.forEach(({ code, label }) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1866,11 +1983,11 @@
   function renderList() {
     updateActiveScheduleInfo();
     const query = normalize(search.value.trim());
-    const visible = songs.filter((song) => {
+    const visible = sortSongsForDisplay(songs.filter((song) => {
       if (activeCategory !== 'ALL' && song.category !== activeCategory) return false;
       if (!query) return true;
       return normalize([song.category, song.number, song.title, song.key, song.genre, song.songCreator, song.dateCreate, song.tempo, stripHtml(song.contentHtml)].join(' ')).includes(query);
-    });
+    }), collectionSort);
     renderMySongs();
     songList.replaceChildren();
     if (!songs.length) {
@@ -1886,16 +2003,14 @@
     visible.forEach((song) => {
       const card = document.createElement('article');
       card.className = 'song-card';
-      const number = escapeText(displaySongNumber(song.number));
-      const categoryLabel = CATEGORIES.find((entry) => entry.code === song.category);
-      const showUploader = song.uploader && String(song.uploader).trim().toLowerCase() !== 'admin';
-      const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo), showUploader ? `Uploader: ${song.uploader}` : ''].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
+      const songIndex = songIndexMarkup(song);
+      const songMeta = songListMetaMarkup(song);
       const openButton = document.createElement('button');
       openButton.type = 'button';
       openButton.className = 'song-card-main';
       openButton.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}`);
-      openButton.innerHTML = `<span class="song-index">${number || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(song.title)}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
-      openButton.addEventListener('click', () => openSong(song, songs, undefined, true, true));
+      openButton.innerHTML = `${songIndex}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
+      openButton.addEventListener('click', () => openSongFromList(song, songs, undefined, true));
       card.append(openButton);
       const quickActions = document.createElement('span');
       quickActions.className = 'song-card-quick-actions';
@@ -1927,11 +2042,8 @@
     updateActiveScheduleInfo();
     const query = normalize(mySongsSearch.value.trim());
     const selectedCategory = mySongsCategoryFilter.value || 'ALL';
-    const visible = mySongs.filter((song) => (selectedCategory === 'ALL' || song.category === selectedCategory)
-      && (!query || normalize([song.number, song.title, stripHtml(song.contentHtml)].join(' ')).includes(query)));
-    if (selectedCategory === 'ALL') {
-      visible.sort((a, b) => (Number(b.localUpdatedAt || b.storedAt) || 0) - (Number(a.localUpdatedAt || a.storedAt) || 0) || compareSongs(a, b));
-    }
+    const visible = sortSongsForDisplay(mySongs.filter((song) => (selectedCategory === 'ALL' || song.category === selectedCategory)
+      && (!query || normalize([song.number, song.title, stripHtml(song.contentHtml)].join(' ')).includes(query))), mySongsSort);
     mySongsCount.textContent = String(mySongs.length);
     mySongsList.classList.toggle('is-upload-request-mode', isMySongUploadMode);
     mySongsList.replaceChildren();
@@ -1948,12 +2060,11 @@
     visible.forEach((song, index) => {
       const card = document.createElement('article');
       card.className = 'song-card';
-      const categoryLabel = CATEGORIES.find((entry) => entry.code === song.category);
-      const extra = [song.genre, song.songCreator, song.dateCreate, formatTempo(song.tempo)].filter(Boolean).map(escapeText).join('<span aria-hidden="true">&#183;</span>');
+      const songMeta = songListMetaMarkup(song);
       if (isMySongUploadMode) {
         const choice = document.createElement('label');
         choice.className = 'my-song-upload-choice';
-        choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}><span class="song-index">${escapeText(displaySongNumber(song.number)) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span>`;
+        choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}>${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span>`;
         card.append(choice);
         fragment.append(card);
         return;
@@ -1962,8 +2073,8 @@
       button.type = 'button';
       button.className = 'song-card-main';
       button.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}`);
-      button.innerHTML = `<span class="song-index">${escapeText(displaySongNumber(song.number)) || '&#9835;'}</span><span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle"><span class="song-category">${escapeText(song.category)} &#183; ${escapeText(categoryLabel ? categoryLabel.label : '')}</span>${song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : ''}${extra}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
-      button.addEventListener('click', () => openSong(song, visible, index));
+      button.innerHTML = `${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
+      button.addEventListener('click', () => openSongFromList(song, visible, index));
       card.append(button);
       const actions = document.createElement('span');
       actions.className = 'my-song-list-actions';
@@ -1975,7 +2086,27 @@
   }
 
   mySongsSearch.addEventListener('input', renderMySongs);
-  mySongsCategoryFilter.addEventListener('change', renderMySongs);
+  mySongsCategoryFilter.addEventListener('change', () => {
+    mySongsCategoryChips.querySelectorAll('[data-my-songs-category]').forEach((item) => {
+      const selected = item.dataset.mySongsCategory === mySongsCategoryFilter.value;
+      item.classList.toggle('is-selected', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+    renderMySongs();
+  });
+  mySongsSortSelect.addEventListener('change', () => {
+    mySongsSort = mySongsSortSelect.value || 'number';
+    renderMySongs();
+  });
+  collectionCategoryFilter.addEventListener('change', () => {
+    activeCategory = collectionCategoryFilter.value || 'ALL';
+    buildFilters();
+    renderList();
+  });
+  collectionSortSelect.addEventListener('change', () => {
+    collectionSort = collectionSortSelect.value || 'number';
+    renderList();
+  });
   [collectionActiveSchedule, mySongsActiveSchedule].filter(Boolean).forEach((container) => {
     container.addEventListener('click', openActiveScheduleFromInfo);
     container.addEventListener('keydown', openActiveScheduleFromInfo);
@@ -2054,6 +2185,8 @@
   }
 
   async function uploadSelectedMySongs(accessCode) {
+    const progressDialog = document.getElementById('my-song-upload-progress-dialog');
+    const progressStatus = document.getElementById('my-song-upload-progress-status');
     const selected = mySongs.filter((song) => selectedMySongUploadIds.has(song.id));
     if (!selected.length) {
       mySongsStatus.textContent = 'Pilih minimal satu lagu untuk diunggah.';
@@ -2067,10 +2200,16 @@
     }
     uploadMySongsButton.disabled = true;
     cancelMySongUploadButton.disabled = true;
+    progressStatus.textContent = `Menyiapkan ${selected.length} lagu untuk dikirim…`;
+    const preventProgressDismiss = (event) => event.preventDefault();
+    progressDialog.addEventListener('cancel', preventProgressDismiss);
+    progressDialog.showModal();
     try {
       const songs = await Promise.all(selected.map(buildDatabaseSongPayload));
       mySongsStatus.textContent = `Mengirim ${songs.length} lagu sementara…`;
+      progressStatus.textContent = `Mengirim ${songs.length} lagu ke koleksi…`;
       const result = await postScheduleApi('submitTemporarySongs', { code: accessCode, uploaderName, songs }, 120000);
+      progressDialog.close();
       selected.forEach((song) => selectedMySongUploadIds.delete(song.id));
       setMySongUploadMode(false);
       mySongsStatus.textContent = `${result.count || songs.length} lagu berhasil dikirim oleh ${uploaderName} ke New Song Temporary.`;
@@ -2083,9 +2222,11 @@
       });
       document.getElementById('my-song-upload-success-dialog').showModal();
     } catch (error) {
+      progressDialog.close();
       renderMySongs();
       mySongsStatus.textContent = `Request gagal: ${error.message || 'Terjadi kesalahan.'}`;
     } finally {
+      progressDialog.removeEventListener('cancel', preventProgressDismiss);
       uploadMySongsButton.disabled = false;
       cancelMySongUploadButton.disabled = false;
     }
@@ -2786,6 +2927,25 @@
     if (dialog.open) document.getElementById('close-dialog').focus();
   }
 
+  function openSongFromList(song, queue = songs, queueIndex, fromCollection = false) {
+    const index = Number.isInteger(queueIndex)
+      ? queueIndex
+      : queue.findIndex((item) => item === song || item.id === song.id);
+    const instrument = findDefaultScoreInstrument(song);
+    if (!instrument) {
+      scoreViewerFromList = false;
+      openSong(song, queue, index, true, fromCollection);
+      return;
+    }
+    // Songs opened from either library go straight to the full-screen score
+    // viewer. The lyric dialog stays closed until a song has no score.
+    openSong(song, queue, index, false, fromCollection);
+    scoreViewerFromList = true;
+    introGeneralNavigationActive = true;
+    introGeneralSongIndex = index;
+    openFullScoreImage(instrument, 0, true, 'library');
+  }
+
   function renderPreviewMetadata() {
     const song = currentPreviewSong;
     const parts = [];
@@ -2978,7 +3138,9 @@
     scoreImageMode = 'score';
     activeScheduleIntro = currentPreviewSong?.scheduleIntro || null;
     const closeLabel = document.querySelector('#close-score-image span');
-    const returnLabel = scoreImageReturnTarget === 'schedule' ? 'Kembali ke jadwal' : 'Kembali ke lirik';
+    const returnLabel = scoreImageReturnTarget === 'schedule'
+      ? 'Kembali ke jadwal'
+      : scoreImageReturnTarget === 'library' ? 'Tutup' : 'Kembali ke lirik';
     if (closeLabel) closeLabel.textContent = returnLabel;
     document.getElementById('close-score-image').setAttribute('aria-label', `Tutup gambar dan ${returnLabel.toLowerCase()}`);
     activeScoreInstrument = instrument;
@@ -3022,7 +3184,7 @@
     const instruments = Object.entries(currentPreviewSong?.images || {})
       .filter(([, files]) => Array.isArray(files) && files.length);
     scoreImageInstruments.replaceChildren();
-    if (instruments.length < 2) {
+    if (scoreViewerFromList || instruments.length < 2) {
       scoreImageInstruments.hidden = true;
       scoreImageDialog.classList.add('instrument-controls-hidden');
       return false;
@@ -3142,7 +3304,8 @@
 
   function findDefaultScoreInstrument(song) {
     const images = song && song.images && typeof song.images === 'object' ? song.images : {};
-    const names = Object.keys(images).filter((name) => Array.isArray(images[name]) && images[name].length);
+    const names = Object.keys(images).filter((name) => Array.isArray(images[name])
+      && images[name].some((file) => scoreImageCandidates(file).length));
     if (preferredInstrument) {
       const preferred = names.find((name) => normalize(name) === normalize(preferredInstrument));
       if (preferred) return preferred;
@@ -3528,12 +3691,18 @@
   });
   scoreImageDialog.addEventListener('cancel', (event) => event.preventDefault());
   scoreImageDialog.addEventListener('close', () => {
+    const returnToLyrics = scoreViewerFromList && currentPreviewSong;
+    const lyricSong = currentPreviewSong;
+    const lyricQueue = currentPreviewSongs;
+    const lyricIndex = currentSongIndex;
+    const lyricFromCollection = currentPreviewFromCollection;
     window.clearTimeout(scoreControlsHideTimer);
     scoreControlsHideTimer = 0;
     scoreImageDialog.classList.remove('controls-hidden');
     scoreImageDialog.classList.remove('instrument-controls-hidden');
     scoreImageInstruments.hidden = true;
     scoreImageMode = 'score';
+    scoreViewerFromList = false;
     activeScheduleIntro = null;
     scoreImageReturnTarget = 'lyrics';
     introGeneralNavigationActive = false;
@@ -3546,6 +3715,10 @@
     transposeControls.hidden = true;
     renderPreviewMetadata();
     renderSongContent();
+    if (returnToLyrics && lyricSong) {
+      scoreViewerFromList = false;
+      openSong(lyricSong, lyricQueue, lyricIndex, true, lyricFromCollection);
+    }
   });
   scoreImagePrevious.addEventListener('click', () => moveFullScoreImage(-1));
   scoreImageNext.addEventListener('click', () => moveFullScoreImage(1));
@@ -3700,6 +3873,16 @@
   });
   scheduleViewDialog.addEventListener('close', () => document.body.classList.remove('schedule-view-open'));
   document.getElementById('add-schedule-intro').addEventListener('click', openScheduleIntroForm);
+  refreshScheduleIntroButton.addEventListener('click', () => {
+    const scheduleId = viewedScheduleId;
+    const latestIntro = pendingScheduleIntroUpdates[scheduleId];
+    if (!scheduleId || !latestIntro) return;
+    scheduleIntros[scheduleId] = latestIntro;
+    delete pendingScheduleIntroUpdates[scheduleId];
+    persistScheduleIntroCache();
+    showScheduleIntro(latestIntro, false);
+    scheduleStatus.textContent = 'Intro terbaru berhasil diperbarui di perangkat ini.';
+  });
   removeScheduleIntroButton.addEventListener('click', removeScheduleIntro);
   scheduleIntroNameButton.addEventListener('click', () => {
     const schedule = schedules.find((item) => item.id === viewedScheduleId);
