@@ -743,6 +743,7 @@
         id: item.id,
         title: String(item.title || 'Ibadah Baru'),
         date: String(item.date || ''),
+        compactView: item.compactView === undefined ? true : Boolean(item.compactView),
         isOpen: Boolean(item.isOpen),
         sharedIntro: item.sharedIntro && typeof item.sharedIntro === 'object' ? item.sharedIntro : null,
         pulledBy: Array.isArray(item.pulledBy) ? item.pulledBy.map((name) => String(name || '').trim()).filter(Boolean) : [],
@@ -1035,7 +1036,7 @@
       const rawSharerName = String(received.sharedByName || '').trim() || 'Pengguna';
       const sharerName = `${rawSharerName.charAt(0).toLocaleUpperCase('id')}${rawSharerName.slice(1)}`;
       const sourceTitle = String(received.title || 'Jadwal ibadah').replace(/\s*\(salinan(?:\s+dari[^)]*)?\)\s*$/i, '').trim() || 'Jadwal ibadah';
-      const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
+      const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, compactView: true, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
       schedules.unshift(imported);
       schedulesDisabled = false;
       activeScheduleId = imported.id;
@@ -1494,7 +1495,7 @@
 
   function addSchedule() {
     const date = todayString();
-    const schedule = { id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: 'Ibadah Baru', date, songs: [] };
+    const schedule = { id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: 'Ibadah Baru', date, compactView: true, songs: [] };
     schedules.unshift(schedule);
     schedulesDisabled = false;
     activeScheduleId = schedule.id;
