@@ -1,9 +1,9 @@
 (() => {
   'use strict';
 
-  // Gunakan URL deployment Web App yang sama dengan song-manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbyuMF9yUmZjUdC8pd2-YGibG42iy5RE6rq3T6fhMaDsqzvvakzZXRldh8VsopCSHnrYJQ/exec';
-  const CACHE_KEY = 'song-book:songs:v1';
+  // Pemutaran file Drive memakai endpoint media yang tersedia di backend manager.
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxtoAKUF9trCzK7lR_yDdnuFYGbU2AO83ZBRbKaJieyT0TxozCKc13r1xm1rkaYfIS5Eg/exec';
+  const CACHE_KEY = 'song-book:songs:v4';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
   const ACTIVE_SCHEDULE_KEY = 'song-book:active-worship-schedule:v1';
@@ -48,6 +48,7 @@
   const collectionActiveSchedule = document.getElementById('collection-active-schedule');
   const mySongsActiveSchedule = document.getElementById('my-songs-active-schedule');
   const appToast = document.getElementById('app-toast');
+  const appToastHome = appToast?.parentElement || document.body;
   let appToastTimer = 0;
   const uploadMySongsButton = document.getElementById('upload-my-songs');
   const cancelMySongUploadButton = document.getElementById('cancel-my-song-upload');
@@ -59,6 +60,9 @@
   const mySongDialog = document.getElementById('my-song-dialog');
   const mySongForm = document.getElementById('my-song-form');
   const mySongInstrumentList = document.getElementById('my-song-instruments');
+  const mySongReferenceList = document.getElementById('my-song-references');
+  const mySongReferenceTemplate = document.getElementById('my-song-reference-template');
+  let mySongReferenceRowCounter = 0;
   const mySongContentInput = document.getElementById('my-song-content');
   const mySongHighlight = document.getElementById('my-song-highlight');
   const MY_SONG_DB = 'song-book:local-library:v1';
@@ -153,6 +157,11 @@
   let scoreImageReturnTarget = 'lyrics';
   let scoreControlsHideTimer = 0;
   let scoreSwipeStart = null;
+  let scoreImageZoom = 1;
+  let scoreImagePanX = 0;
+  let scoreImagePanY = 0;
+  let scoreImagePinchStart = null;
+  let scoreImagePanStart = null;
   let resolveIntroRemovalConfirmation = null;
   let pendingScheduleDeletionId = '';
   const shareDialog = document.getElementById('schedule-share-dialog');
@@ -1124,7 +1133,7 @@
       return `<li class="schedule-song-row${sourceClass}${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
         <button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button>
         <span class="schedule-song-order">${index + 1}</span>
-        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}</span><span class="schedule-song-compact-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span>${localAttribution}</button>
+        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}</span><span class="schedule-song-compact-name"><span class="schedule-song-compact-text">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span>${entry.preWorship ? '<span class="schedule-song-pre-label">(Pra)</span>' : ''}</span>${localAttribution}</button>
         <span class="schedule-song-actions">
           <label class="pre-worship-toggle"><input type="checkbox" data-action="toggle-pre-worship" data-entry-id="${escapeText(entry.entryId)}" ${entry.preWorship ? 'checked' : ''}><span>Pra-ibadah</span></label>
           <button type="button" data-action="copy-to-my-songs" data-entry-id="${escapeText(entry.entryId)}" aria-label="Add to Laguku: ${escapeText(song.title || entry.title || '')}" title="Add to Laguku">Laguku</button>
@@ -1471,13 +1480,19 @@
   function showAppToast(message) {
     if (!appToast) return;
     window.clearTimeout(appToastTimer);
+    const activeDialogs = [...document.querySelectorAll('dialog[open]')];
+    const topDialog = activeDialogs[activeDialogs.length - 1];
+    if (topDialog && appToast.parentElement !== topDialog) topDialog.append(appToast);
     appToast.textContent = message;
     appToast.hidden = false;
     appToast.classList.remove('is-visible');
     window.requestAnimationFrame(() => appToast.classList.add('is-visible'));
     appToastTimer = window.setTimeout(() => {
       appToast.classList.remove('is-visible');
-      window.setTimeout(() => { appToast.hidden = true; }, 180);
+      window.setTimeout(() => {
+        appToast.hidden = true;
+        if (appToast.parentElement !== appToastHome) appToastHome.append(appToast);
+      }, 180);
     }, 2600);
   }
 
@@ -1597,6 +1612,7 @@
       songCreator: song.songCreator || '',
       dateCreate: song.dateCreate || '',
       tempo: song.tempo || '',
+      referenceUrl: song.referenceUrl || '',
       contentHtml: normalizeSongContentHtml(song.contentHtml),
       images: images && typeof images === 'object' ? images : {},
       overrides: {}
@@ -2169,6 +2185,32 @@
       }
       if (uploadFiles.length) instruments[instrument] = uploadFiles;
     }
+    const references = [];
+    for (const reference of (Array.isArray(song.references) ? song.references : [])) {
+      if (reference.type !== 'file') {
+        references.push({ name: reference.name, type: 'link', url: reference.url });
+        continue;
+      }
+      const dataUrl = String(reference.dataUrl || reference.data || (typeof reference.url === 'string' && reference.url.startsWith('data:') ? reference.url : ''));
+      const match = dataUrl.match(/^data:([^;,]+)?;base64,([\s\S]+)$/i);
+      if (match) {
+        references.push({
+          name: reference.name,
+          type: 'file',
+          file: {
+            originalName: String(reference.fileName || reference.name || 'Referensi').split(/[\\/]/).pop(),
+            mimeType: reference.mimeType || match[1] || 'application/octet-stream',
+            base64: match[2]
+          }
+        });
+      } else if (reference.id) {
+        references.push({ ...reference, type: 'file' });
+      } else {
+        throw new Error(`File referensi “${reference.name || 'Referensi'}” tidak memiliki data lokal untuk diunggah.`);
+      }
+    }
+    if (song.referenceUrl && !references.some((reference) => reference.url === song.referenceUrl)) references.push({ name: 'YouTube', type: 'link', url: song.referenceUrl });
+    const referenceUrl = references.find((reference) => reference.type === 'link' && isSupportedYouTubeReference(reference.url))?.url || song.referenceUrl || '';
     return {
       category: song.category,
       number: song.number,
@@ -2178,6 +2220,8 @@
       songCreator: song.songCreator || '',
       dateCreate: song.dateCreate || '',
       tempo: song.tempo || '',
+      referenceUrl,
+      references,
       contentHtml: song.contentHtml || '',
       instrumentNames: Object.keys(song.images || {}),
       instrumentRenames: [],
@@ -2293,6 +2337,8 @@
       songCreator: sourceSong.songCreator || '',
       dateCreate: sourceSong.dateCreate || '',
       tempo: sourceSong.tempo || '',
+      referenceUrl: sourceSong.referenceUrl || '',
+      references: Array.isArray(sourceSong.references) ? JSON.parse(JSON.stringify(sourceSong.references)) : [],
       contentHtml: normalizeSongContentHtml(sourceSong.contentHtml),
       images: sourceSong.images && typeof sourceSong.images === 'object' ? JSON.parse(JSON.stringify(sourceSong.images)) : {},
       storedAt: now,
@@ -2352,6 +2398,113 @@
     row.querySelector('.my-song-remove-instrument').addEventListener('click', () => row.remove());
     mySongInstrumentList.append(row);
     appendMySongScoreInput(row);
+  }
+
+  function addMySongReference(reference = {}) {
+    const row = mySongReferenceTemplate.content.firstElementChild.cloneNode(true);
+    const id = `my-song-reference-${++mySongReferenceRowCounter}`;
+    const linkRadio = row.querySelector('.reference-type-link');
+    const fileRadio = row.querySelector('.reference-type-file');
+    linkRadio.name = fileRadio.name = id;
+    const isFile = reference.type === 'file';
+    linkRadio.checked = !isFile;
+    fileRadio.checked = isFile;
+    row.querySelector('.reference-name').value = reference.name || '';
+    row.querySelector('.reference-url').value = reference.type === 'link' ? (reference.url || '') : '';
+    row.dataset.existingReference = JSON.stringify(isFile ? reference : null);
+    const linkField = row.querySelector('.reference-link-field');
+    const fileField = row.querySelector('.reference-file-field');
+    const fileName = row.querySelector('.reference-file-name');
+    const previewButton = row.querySelector('.reference-file-preview');
+    const oldFile = isFile ? reference : null;
+    if (oldFile) {
+      fileName.textContent = oldFile.fileName || oldFile.originalName || oldFile.name || 'File tersimpan';
+      previewButton.hidden = !Boolean(oldFile.dataUrl || oldFile.url || oldFile.data);
+    }
+    const updateType = () => {
+      linkField.hidden = !linkRadio.checked;
+      fileField.hidden = !fileRadio.checked;
+    };
+    const nameInput = row.querySelector('.reference-name');
+    const ensureNextRow = () => {
+      if (nameInput.value.trim() && row === mySongReferenceList.lastElementChild) addMySongReference();
+    };
+    nameInput.addEventListener('input', () => { updateType(); ensureNextRow(); });
+    row.querySelector('.reference-url').addEventListener('change', ensureNextRow);
+    linkRadio.addEventListener('change', updateType);
+    fileRadio.addEventListener('change', updateType);
+    row.querySelector('.reference-file').addEventListener('change', (event) => {
+      const file = event.currentTarget.files?.[0];
+      if (!file) return;
+      row.dataset.existingReference = 'null';
+      fileName.textContent = file.name;
+      previewButton.hidden = false;
+      previewButton.dataset.previewUrl = URL.createObjectURL(file);
+      previewButton.dataset.previewMime = file.type || '';
+      previewButton.dataset.previewName = file.name;
+      ensureNextRow();
+    });
+    row.querySelector('.remove-reference').addEventListener('click', () => row.remove());
+    mySongReferenceList.append(row);
+    updateType();
+    return row;
+  }
+
+  function populateMySongReferences(references, legacyUrl = '') {
+    mySongReferenceList.replaceChildren();
+    const entries = Array.isArray(references) ? references : [];
+    if (entries.length) entries.forEach((reference) => addMySongReference(reference));
+    if (legacyUrl && !entries.some((reference) => reference?.url === legacyUrl)) addMySongReference({ name: 'YouTube', type: 'link', url: legacyUrl });
+  }
+
+  function isSupportedReferenceFile(file) {
+    return Boolean(file && ((file.type || '').startsWith('audio/') || (file.type || '').startsWith('video/') || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|wma|mp4|m4v|mov|webm|ogv|avi)$/i.test(file.name || '')));
+  }
+
+  async function collectMySongReferences() {
+    const references = [];
+    for (const row of mySongReferenceList.querySelectorAll('.reference-row')) {
+      const name = row.querySelector('.reference-name').value.trim();
+      const isLink = row.querySelector('.reference-type-link').checked;
+      const url = row.querySelector('.reference-url').value.trim();
+      const file = row.querySelector('.reference-file').files?.[0];
+      const existing = JSON.parse(row.dataset.existingReference || 'null');
+      if (!name && !url && !file && !existing) continue;
+      if (!name) throw new Error('Isi nama untuk setiap referensi.');
+      if (isLink) {
+        if (!/^https?:\/\//i.test(url)) throw new Error(`Link referensi “${name}” harus diawali http:// atau https://.`);
+        references.push({ name, type: 'link', url });
+      } else if (file) {
+        if (!isSupportedReferenceFile(file)) throw new Error(`File referensi “${name}” harus berupa audio atau video.`);
+        if (file.size > 25 * 1024 * 1024) throw new Error(`Ukuran file referensi “${name}” maksimal 25 MB.`);
+        const local = await readLocalImage(file, file.name);
+        references.push({ name, type: 'file', fileName: file.name, mimeType: file.type || 'application/octet-stream', mediaType: (file.type || '').startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|wma)$/i.test(file.name) ? 'audio' : 'video', dataUrl: local.url });
+      } else if (existing && (existing.id || existing.dataUrl || existing.data || existing.url)) {
+        references.push({ ...existing, name, type: 'file' });
+      } else {
+        throw new Error(`Pilih file audio atau video untuk referensi “${name}”.`);
+      }
+    }
+    return references;
+  }
+
+  function previewMySongReference(row) {
+    const button = row.querySelector('.reference-file-preview');
+    const file = row.querySelector('.reference-file').files?.[0];
+    const existing = JSON.parse(row.dataset.existingReference || 'null');
+    const url = button.dataset.previewUrl || existing?.dataUrl || existing?.data || existing?.url;
+    if (!url) return;
+    const mimeType = button.dataset.previewMime || file?.type || existing?.mimeType || '';
+    const playerHost = document.getElementById('my-song-reference-preview-player');
+    playerHost.replaceChildren();
+    const fileName = button.dataset.previewName || file?.name || existing?.fileName || existing?.name || '';
+    const player = document.createElement(mimeType.startsWith('audio/') || existing?.mediaType === 'audio' || /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|wma)$/i.test(fileName) ? 'audio' : 'video');
+    player.controls = true;
+    player.src = url;
+    if (player.tagName === 'VIDEO') player.playsInline = true;
+    playerHost.append(player);
+    document.getElementById('my-song-reference-preview-name').textContent = fileName || 'Referensi';
+    document.getElementById('my-song-reference-file-preview').showModal();
   }
 
   function appendMySongScoreInput(row) {
@@ -2536,6 +2689,8 @@
       const category = document.getElementById('my-song-category').value;
       const number = document.getElementById('my-song-number').value.trim();
       const title = document.getElementById('my-song-title').value.trim();
+      const references = await collectMySongReferences();
+      const referenceUrl = references.find((reference) => reference.type === 'link' && isSupportedYouTubeReference(reference.url))?.url || '';
       const stem = safeLocalFilePart(`${category} ${number} ${title}`);
       const images = {};
       const seenInstruments = new Set();
@@ -2567,6 +2722,8 @@
         songCreator: document.getElementById('my-song-creator').value.trim(),
         dateCreate: document.getElementById('my-song-date').value.trim(),
         tempo: document.getElementById('my-song-tempo').value.trim(),
+        referenceUrl,
+        references,
         contentHtml: editableTextToHtml(document.getElementById('my-song-content').value),
         images,
         storedAt: editingMySong?.storedAt || Date.now(),
@@ -2588,6 +2745,7 @@
       mySongs.sort(compareSongs);
       renderMySongs();
       mySongForm.reset();
+      mySongReferenceList.replaceChildren();
       mySongInstrumentList.replaceChildren();
       addMySongInstrument();
       statusEl.textContent = editingMySongId ? 'Perubahan lagu tersimpan lokal di perangkat ini.' : 'Lagu dan gambar tersimpan lokal di perangkat ini.';
@@ -2617,6 +2775,7 @@
     document.getElementById('my-song-creator').value = song.songCreator || '';
     document.getElementById('my-song-date').value = song.dateCreate || '';
     document.getElementById('my-song-tempo').value = song.tempo || '';
+    populateMySongReferences(song.references, song.referenceUrl || '');
     mySongContentInput.value = htmlToEditableText(song.contentHtml || '');
     mySongInstrumentList.replaceChildren();
     const names = Object.keys(song.images || {});
@@ -2665,6 +2824,7 @@
     editingMySongId = '';
     editingMySong = null;
     mySongForm.reset();
+    mySongReferenceList.replaceChildren();
     mySongInstrumentList.replaceChildren();
     addMySongInstrument();
     updateMySongHighlight();
@@ -2676,6 +2836,18 @@
   document.getElementById('close-my-song-form').addEventListener('click', () => mySongDialog.close());
   document.getElementById('close-my-song-image-preview').addEventListener('click', () => document.getElementById('my-song-image-preview').close());
   document.getElementById('my-song-image-preview').addEventListener('click', (event) => { if (event.target === event.currentTarget) event.currentTarget.close(); });
+  document.getElementById('add-my-song-reference').addEventListener('click', () => addMySongReference());
+  mySongReferenceList.addEventListener('click', (event) => {
+    const button = event.target.closest('.reference-file-preview');
+    if (button) previewMySongReference(button.closest('.reference-row'));
+  });
+  document.getElementById('close-my-song-reference-preview').addEventListener('click', () => {
+    const host = document.getElementById('my-song-reference-preview-player');
+    host.querySelectorAll('audio,video').forEach((media) => media.pause());
+    host.replaceChildren();
+    document.getElementById('my-song-reference-file-preview').close();
+  });
+  document.getElementById('my-song-reference-file-preview').addEventListener('close', () => document.getElementById('my-song-reference-preview-player').replaceChildren());
   document.getElementById('add-my-song-instrument').addEventListener('click', () => addMySongInstrument());
   mySongForm.addEventListener('submit', saveMySong);
   document.getElementById('confirm-delete-my-song').addEventListener('click', () => finishMySongDeletion(true));
@@ -2885,7 +3057,23 @@
     currentPreviewSong = song;
     const collectionActions = document.getElementById('collection-preview-actions');
     const addToScheduleButton = document.getElementById('preview-add-to-schedule');
-    collectionActions.hidden = !currentPreviewFromCollection;
+    const referenceButton = document.getElementById('preview-reference');
+    let songReferences = song.references ?? song.references_json ?? song.reference_json ?? [];
+    if (typeof songReferences === 'string') {
+      try { songReferences = JSON.parse(songReferences); } catch (error) { songReferences = []; }
+    }
+    if (!Array.isArray(songReferences)) songReferences = [];
+    songReferences = songReferences.filter((reference) => reference && typeof reference === 'object');
+    const legacyReferenceUrl = String(song.referenceUrl || song.reference_url || '').trim();
+    if (legacyReferenceUrl && !songReferences.some((reference) => reference.url === legacyReferenceUrl)) {
+      songReferences.push({ name: 'YouTube', type: 'link', url: legacyReferenceUrl });
+    }
+    const hasReference = songReferences.length > 0;
+    collectionActions.hidden = !currentPreviewFromCollection && !hasReference;
+    referenceButton.hidden = !hasReference;
+    referenceButton.dataset.references = JSON.stringify(songReferences);
+    addToScheduleButton.hidden = !currentPreviewFromCollection;
+    document.getElementById('preview-add-to-my-songs').hidden = !currentPreviewFromCollection;
     addToScheduleButton.disabled = !activeScheduleId;
     addToScheduleButton.title = activeScheduleId ? 'Tambahkan ke jadwal aktif' : 'Pilih jadwal aktif terlebih dahulu';
     const introButton = document.getElementById('schedule-intro-preview-button');
@@ -2903,6 +3091,7 @@
     document.getElementById('dialog-category').textContent = `${song.category} · ${(CATEGORIES.find((entry) => entry.code === song.category) || {}).label || ''}`;
     const displayNumber = displaySongNumber(song.number);
     document.getElementById('dialog-title').textContent = `${displayNumber ? `${displayNumber}. ` : ''}${song.title}`;
+    if (!document.getElementById('reference-dialog').hidden) document.getElementById('reference-title').textContent = document.getElementById('dialog-title').textContent;
     renderPreviewMetadata();
     renderSongContent();
     const readerPosition = document.getElementById('reader-position');
@@ -3203,6 +3392,39 @@
     return true;
   }
 
+  function clampScoreImagePan(x, y, zoom = scoreImageZoom) {
+    const viewportWidth = scoreImageDialog.clientWidth || window.innerWidth;
+    const viewportHeight = scoreImageDialog.clientHeight || window.innerHeight;
+    const imageWidth = fullScoreImage.offsetWidth || fullScoreImage.naturalWidth || 0;
+    const imageHeight = fullScoreImage.offsetHeight || fullScoreImage.naturalHeight || 0;
+    const maxX = Math.max(0, (imageWidth * zoom - viewportWidth) / 2);
+    const maxY = Math.max(0, (imageHeight * zoom - viewportHeight) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, x)),
+      y: Math.max(-maxY, Math.min(maxY, y))
+    };
+  }
+
+  function setScoreImageZoom(zoom, panX = scoreImagePanX, panY = scoreImagePanY) {
+    scoreImageZoom = Math.max(1, Math.min(5, zoom));
+    const pan = clampScoreImagePan(panX, panY, scoreImageZoom);
+    scoreImagePanX = pan.x;
+    scoreImagePanY = pan.y;
+    fullScoreImage.style.setProperty('--score-image-zoom', String(scoreImageZoom));
+    fullScoreImage.style.setProperty('--score-image-pan-x', `${scoreImagePanX}px`);
+    fullScoreImage.style.setProperty('--score-image-pan-y', `${scoreImagePanY}px`);
+  }
+
+  function resetScoreImageZoom() {
+    scoreImageZoom = 1;
+    scoreImagePanX = 0;
+    scoreImagePanY = 0;
+    scoreImagePinchStart = null;
+    scoreImagePanStart = null;
+    scoreSwipeStart = null;
+    setScoreImageZoom(1, 0, 0);
+  }
+
   function setScoreImageControlsHidden(hidden) {
     scoreImageDialog.classList.toggle('controls-hidden', Boolean(hidden));
     window.clearTimeout(scoreControlsHideTimer);
@@ -3229,6 +3451,7 @@
     const file = activeScoreFiles[activeScoreIndex];
     const urls = scoreImageCandidates(file);
     if (!urls.length) return;
+    resetScoreImageZoom();
     fullScoreImage.dataset.candidates = JSON.stringify(urls);
     fullScoreImage.dataset.attempt = '0';
     fullScoreImage.src = urls[0];
@@ -3283,6 +3506,9 @@
       renderFullScoreImage();
       return;
     }
+    // A zoomed image can be panned freely; crossing into another song is
+    // reserved for the explicit previous/next song buttons at the top.
+    if (scoreImageZoom > 1.001) return;
     if (direction > 0 && scoreImageMode === 'score' && nextIndex >= activeScoreFiles.length) {
       const nextSongIndex = findNextGeneralSongIndex();
       if (nextSongIndex >= 0) {
@@ -3663,6 +3889,544 @@
     renderSongContent();
   }
 
+  let referenceMedia = null;
+  let referenceEmbed = false;
+  let referenceEmbedPlaying = false;
+  let referenceOpenRequestId = 0;
+  let referenceDriveObjectUrl = '';
+  let referencePlaybackRequestId = 0;
+  let referencePopupOpen = false;
+  let activeReferenceCacheIds = new Set();
+  let referenceDownloadCount = 0;
+  let referenceDownloadProgress = null;
+  let referenceProgressEstimateTimer = 0;
+  let referenceCacheClearGeneration = 0;
+  let currentReferenceFileSize = null;
+  let currentReferenceIsStreaming = false;
+  const referenceMediaRequests = new Map();
+  const REFERENCE_CACHE_DB = 'psallo-reference-media-v1';
+  const REFERENCE_CACHE_STORE = 'media';
+  const REFERENCE_CACHE_WARNING_AT = 300 * 1024 * 1024;
+  function updateReferenceLoading(delta) {
+    const previousCount = referenceDownloadCount;
+    referenceDownloadCount = Math.max(0, referenceDownloadCount + delta);
+    if (previousCount === 0 && referenceDownloadCount > 0) referenceDownloadProgress = 0;
+    if (referenceDownloadCount === 0) {
+      window.clearInterval(referenceProgressEstimateTimer);
+      referenceProgressEstimateTimer = 0;
+      referenceDownloadProgress = null;
+    }
+    const indicator = document.getElementById('reference-loading');
+    if (!indicator) return;
+    indicator.hidden = referenceDownloadCount === 0;
+    const label = document.getElementById('reference-loading-text');
+    const countLabel = referenceDownloadCount > 1 ? ` ${referenceDownloadCount} referensi` : ' referensi';
+    label.textContent = referenceDownloadCount ? `Mengunduh${countLabel}…${referenceDownloadProgress === null ? '' : ` ${referenceDownloadProgress}%`}` : 'Mengunduh referensi…';
+  }
+  function updateReferenceLoadingProgress(percent) {
+    if (!referenceDownloadCount) return;
+    window.clearInterval(referenceProgressEstimateTimer);
+    referenceProgressEstimateTimer = 0;
+    referenceDownloadProgress = Math.max(referenceDownloadProgress || 0, Math.max(0, Math.min(100, Math.floor(percent))));
+    updateReferenceLoading(0);
+  }
+  function resetReferenceLoadingProgress() {
+    window.clearInterval(referenceProgressEstimateTimer);
+    referenceProgressEstimateTimer = 0;
+    referenceDownloadProgress = 0;
+    updateReferenceLoading(0);
+  }
+  function estimateReferenceLoadingProgress(targetPercent) {
+    window.clearInterval(referenceProgressEstimateTimer);
+    const target = Math.max(referenceDownloadProgress || 0, Math.min(99, Math.floor(targetPercent)));
+    referenceProgressEstimateTimer = window.setInterval(() => {
+      if (!referenceDownloadCount || referenceDownloadProgress >= target) {
+        window.clearInterval(referenceProgressEstimateTimer);
+        referenceProgressEstimateTimer = 0;
+        return;
+      }
+      referenceDownloadProgress += 1;
+      updateReferenceLoading(0);
+    }, 20);
+  }
+  function openReferenceCacheDb() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(REFERENCE_CACHE_DB, 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(REFERENCE_CACHE_STORE)) request.result.createObjectStore(REFERENCE_CACHE_STORE, { keyPath: 'fileId' });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Penyimpanan referensi tidak tersedia.'));
+    });
+  }
+  async function readReferenceCache(fileId) {
+    const db = await openReferenceCacheDb();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(REFERENCE_CACHE_STORE, 'readonly').objectStore(REFERENCE_CACHE_STORE).get(String(fileId));
+      request.onsuccess = () => { db.close(); resolve(request.result || null); };
+      request.onerror = () => { db.close(); reject(request.error); };
+    });
+  }
+  async function listReferenceCache() {
+    const db = await openReferenceCacheDb();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(REFERENCE_CACHE_STORE, 'readonly').objectStore(REFERENCE_CACHE_STORE).getAll();
+      request.onsuccess = () => { db.close(); resolve(request.result || []); };
+      request.onerror = () => { db.close(); reject(request.error); };
+    });
+  }
+  function formatReferenceCacheSize(bytes) {
+    if (!bytes) return '0 MB';
+    if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+  async function updateReferenceCacheUsage() {
+    const usage = document.getElementById('reference-cache-usage');
+    const warning = document.getElementById('reference-cache-warning');
+    if (!usage || !warning) return;
+    try {
+      const entries = await listReferenceCache();
+      const total = entries.reduce((sum, entry) => sum + (entry.blob instanceof Blob ? entry.blob.size : 0), 0);
+      const currentSize = currentReferenceFileSize === null ? (currentReferenceIsStreaming ? 'Streaming' : '—') : formatReferenceCacheSize(currentReferenceFileSize);
+      usage.textContent = `${currentSize} / ${formatReferenceCacheSize(total)}`;
+      usage.title = 'Ukuran referensi yang diputar / total cache Referensi tersimpan';
+      warning.hidden = total < REFERENCE_CACHE_WARNING_AT;
+    } catch (error) {
+      usage.textContent = 'Cache referensi: tidak dapat dibaca';
+      warning.hidden = true;
+    }
+  }
+  async function writeReferenceCache(entry) {
+    const db = await openReferenceCacheDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(REFERENCE_CACHE_STORE, 'readwrite');
+      transaction.objectStore(REFERENCE_CACHE_STORE).put(entry);
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => { db.close(); reject(transaction.error); };
+      transaction.onabort = () => { db.close(); reject(transaction.error || new Error('Penyimpanan referensi penuh.')); };
+    });
+  }
+  async function deleteReferenceCache(fileId) {
+    const db = await openReferenceCacheDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(REFERENCE_CACHE_STORE, 'readwrite');
+      transaction.objectStore(REFERENCE_CACHE_STORE).delete(String(fileId));
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => { db.close(); reject(transaction.error); };
+    });
+  }
+  async function clearAllReferenceCache() {
+    const db = await openReferenceCacheDb();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(REFERENCE_CACHE_STORE, 'readwrite');
+      const request = transaction.objectStore(REFERENCE_CACHE_STORE).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const entry = cursor.value;
+        if (entry && entry.fileId && entry.blob instanceof Blob) cursor.delete();
+        cursor.continue();
+      };
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => { db.close(); reject(transaction.error); };
+      transaction.onabort = () => { db.close(); reject(transaction.error || new Error('Cache referensi gagal dibersihkan.')); };
+    });
+  }
+  async function getReferenceMediaBlob(reference, fileId) {
+    try {
+      const cached = await readReferenceCache(fileId);
+      if (cached && cached.blob instanceof Blob) {
+        cached.deleteAfter = 0;
+        cached.lastAccessAt = Date.now();
+        await writeReferenceCache(cached);
+        void updateReferenceCacheUsage();
+        return cached.blob;
+      }
+    } catch (error) {}
+    if (referenceMediaRequests.has(fileId)) return referenceMediaRequests.get(fileId);
+    updateReferenceLoading(1);
+    const cacheGeneration = referenceCacheClearGeneration;
+    const request = (async () => {
+      try {
+        const decode = (base64) => {
+          const binary = atob(base64 || '');
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+          return bytes;
+        };
+        const downloadDirectlyFromDrive = async (totalBytes, mimeType) => {
+          const sourceUrl = reference.url || `https://drive.google.com/open?id=${encodeURIComponent(fileId)}`;
+          const response = await fetch(referenceMediaUrl(sourceUrl), { mode: 'cors', credentials: 'omit', cache: 'no-store' });
+          if (!response.ok || !response.body) throw new Error('Browser tidak dapat mengakses file Drive langsung.');
+          const contentType = (response.headers.get('content-type') || '').toLowerCase();
+          if (contentType.includes('text/html')) throw new Error('Drive mengembalikan halaman web, bukan file media.');
+          const reader = response.body.getReader();
+          const chunks = [];
+          let received = 0;
+          try {
+            while (true) {
+              const part = await reader.read();
+              if (part.done) break;
+              if (!part.value?.length) continue;
+              chunks.push(part.value);
+              received += part.value.length;
+              if (totalBytes > 0) updateReferenceLoadingProgress(received / totalBytes * 100);
+            }
+          } catch (error) {
+            await reader.cancel().catch(() => {});
+            throw error;
+          }
+          if (totalBytes > 0 && received !== totalBytes) throw new Error('Ukuran unduhan Drive tidak sesuai dengan ukuran file.');
+          return new Blob(chunks, { type: mimeType || 'application/octet-stream' });
+        };
+        const downloadViaAppsScriptChunks = async (firstResult, totalBytesHint) => {
+          const chunkSize = 4 * 1024 * 1024;
+          if (!firstResult && totalBytesHint > 0) estimateReferenceLoadingProgress(Math.min(99, chunkSize / totalBytesHint * 100));
+          let result = firstResult || await postScheduleApi('getReferenceMedia', { fileId, clientApp: 'song-book', offset: 0, chunkSize }, 120000);
+          let bytes = decode(result.base64);
+          const totalBytes = Number(result.totalBytes);
+          if (!Number.isFinite(totalBytes) || totalBytes <= 0) {
+            updateReferenceLoadingProgress(100);
+            return bytes;
+          }
+          const fullBytes = new Uint8Array(totalBytes);
+          fullBytes.set(bytes, Number(result.offset) || 0);
+          let received = bytes.length;
+          updateReferenceLoadingProgress(received / totalBytes * 100);
+          while (received < totalBytes) {
+            estimateReferenceLoadingProgress(Math.min(99, (received + Math.min(chunkSize, totalBytes - received)) / totalBytes * 100));
+            result = await postScheduleApi('getReferenceMedia', { fileId, clientApp: 'song-book', offset: received, chunkSize }, 120000);
+            bytes = decode(result.base64);
+            if (!bytes.length) throw new Error('Unduhan Referensi terputus sebelum selesai.');
+            fullBytes.set(bytes, Number(result.offset) || received);
+            received += bytes.length;
+            updateReferenceLoadingProgress(received / totalBytes * 100);
+          }
+          return fullBytes;
+        };
+        const metadata = await postScheduleApi('getReferenceMedia', { fileId, clientApp: 'song-book', metadataOnly: true }, 120000);
+        const metadataBytes = metadata.base64 ? decode(metadata.base64) : null;
+        const metadataTotalBytes = Number(metadata.totalBytes);
+        const metadataHasWholeFile = metadataBytes && (!Number.isFinite(metadataTotalBytes) || metadataTotalBytes <= 0 || metadataBytes.length === metadataTotalBytes);
+        let blob;
+        if (metadataHasWholeFile) {
+          // Compatibility with older Apps Script deployments that return the whole file.
+          blob = new Blob([metadataBytes], { type: metadata.mimeType || reference.mimeType || 'application/octet-stream' });
+          updateReferenceLoadingProgress(100);
+        } else {
+          try {
+            blob = await downloadDirectlyFromDrive(Number(metadata.totalBytes) || 0, metadata.mimeType);
+          } catch (error) {
+            resetReferenceLoadingProgress();
+            blob = new Blob([await downloadViaAppsScriptChunks(metadata.base64 ? metadata : null, Number(metadata.totalBytes))], { type: metadata.mimeType || reference.mimeType || 'application/octet-stream' });
+          }
+        }
+        try {
+          if (cacheGeneration === referenceCacheClearGeneration) await writeReferenceCache({ fileId, fileName: metadata.fileName || reference.fileName || reference.name || '', mimeType: blob.type, blob, lastAccessAt: Date.now(), deleteAfter: 0 });
+          void updateReferenceCacheUsage();
+        } catch (error) {}
+        return blob;
+      } finally {
+        updateReferenceLoading(-1);
+      }
+    })();
+    referenceMediaRequests.set(fileId, request);
+    try { return await request; }
+    finally { referenceMediaRequests.delete(fileId); }
+  }
+  async function preloadReferenceMedia(references) {
+    for (const reference of references) {
+      const fileId = reference && (reference.id || referenceDriveFileId(reference.url || ''));
+      if (!fileId) continue;
+      try { await getReferenceMediaBlob(reference, String(fileId)); } catch (error) { console.warn('Referensi Drive gagal disimpan di cache browser:', error.message || error); }
+    }
+  }
+  const referenceSeek = document.getElementById('reference-seek');
+  const referenceTime = document.getElementById('reference-time');
+  let referenceSeekDuration = 0;
+  let referenceSeekInProgress = false;
+  let referenceSeekPoll = 0;
+  function formatReferenceTime(value) {
+    const seconds = Math.max(0, Math.floor(Number(value) || 0));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainder = String(seconds % 60).padStart(2, '0');
+    return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${remainder}` : `${minutes}:${remainder}`;
+  }
+  function updateReferenceSeek(currentTime, duration) {
+    const safeDuration = Number.isFinite(Number(duration)) && Number(duration) > 0 ? Number(duration) : 0;
+    const safeTime = Number.isFinite(Number(currentTime)) ? Math.max(0, Number(currentTime)) : 0;
+    referenceSeekDuration = safeDuration;
+    referenceSeek.disabled = !referenceMedia || !safeDuration;
+    referenceSeek.max = String(safeDuration || 0);
+    if (referenceSeekInProgress) return;
+    referenceSeek.value = String(Math.min(safeTime, safeDuration || safeTime));
+    referenceTime.textContent = `${formatReferenceTime(safeTime)} / ${formatReferenceTime(safeDuration)}`;
+  }
+  function requestReferenceEmbedSeek() {
+    if (!referenceEmbed || !referenceMedia) return;
+    referenceMedia.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'getCurrentTime', args: [] }), '*');
+    referenceMedia.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'getDuration', args: [] }), '*');
+  }
+  function bindReferenceNativeSeek(media) {
+    const sync = () => updateReferenceSeek(media.currentTime, media.duration);
+    ['loadedmetadata', 'durationchange', 'timeupdate', 'seeked'].forEach((eventName) => media.addEventListener(eventName, sync));
+    sync();
+  }
+  referenceSeek.addEventListener('input', () => {
+    referenceSeekInProgress = true;
+    referenceTime.textContent = `${formatReferenceTime(referenceSeek.value)} / ${formatReferenceTime(referenceSeekDuration)}`;
+  });
+  referenceSeek.addEventListener('change', () => {
+    const targetTime = Math.max(0, Number(referenceSeek.value) || 0);
+    referenceSeekInProgress = false;
+    if (referenceEmbed && referenceMedia) referenceMedia.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [targetTime, true] }), '*');
+    else if (referenceMedia) referenceMedia.currentTime = targetTime;
+    updateReferenceSeek(targetTime, referenceSeekDuration);
+  });
+  window.addEventListener('message', (event) => {
+    if (!referenceEmbed || !referenceMedia || event.source !== referenceMedia.contentWindow) return;
+    try {
+      const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      const info = data?.info || {};
+      const state = Number(info.playerState);
+      if (data?.event === 'infoDelivery') {
+        if (Number.isFinite(state)) referenceEmbedPlaying = state === 1;
+        const currentTime = Number(info.currentTime);
+        const duration = Number(info.duration);
+        if (Number.isFinite(currentTime) || Number.isFinite(duration)) updateReferenceSeek(Number.isFinite(currentTime) ? currentTime : referenceSeek.value, Number.isFinite(duration) ? duration : referenceSeekDuration);
+      }
+    } catch (error) {}
+  });
+  function referenceDriveFileId(url) {
+    try {
+      const parsed = new URL(String(url || '').trim());
+      const host = parsed.hostname.toLowerCase();
+      if (host !== 'drive.google.com' && !host.endsWith('.drive.google.com') && host !== 'drive.usercontent.google.com') return '';
+      return parsed.searchParams.get('id') || parsed.pathname.match(/\/(?:file\/d|uc)\/([^/?]+)/i)?.[1] || '';
+    } catch (error) { return ''; }
+  }
+  function referenceMediaUrl(url) {
+    const fileId = referenceDriveFileId(url);
+    if (!fileId) return String(url || '').trim();
+    const resourceKey = new URL(String(url).trim()).searchParams.get('resourcekey');
+    return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t${resourceKey ? `&resourcekey=${encodeURIComponent(resourceKey)}` : ''}`;
+  }
+  async function driveReferenceMediaType(url) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 4000);
+    try {
+      const response = await fetch(referenceMediaUrl(url), { method: 'HEAD', mode: 'cors', signal: controller.signal });
+      const contentType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+      if (response.ok && contentType.startsWith('audio/')) return 'audio';
+      if (response.ok && contentType.startsWith('video/')) return 'video';
+    } catch (error) {
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    return '';
+  }
+  function referenceMediaType(url) {
+    const value = String(url || '').trim();
+    if (/^(?:https?:\/\/)?(?:[\w-]+\.)?(?:youtube\.com|youtu\.be|vimeo\.com)\//i.test(value)) return 'embed';
+    if (referenceDriveFileId(value)) return 'drive';
+    const path = (() => { try { return new URL(value).pathname.toLowerCase(); } catch (error) { return value.toLowerCase(); } })();
+    if (/\.(?:mp3|wav|m4a|aac|flac|ogg|oga|opus|wma)(?:$|[?#])/i.test(path)) return 'audio';
+    if (/\.(?:mp4|m4v|mov|webm|ogv|avi)(?:$|[?#])/i.test(path)) return 'video';
+    return 'external';
+  }
+  function youtubeReferenceVideoId(url) {
+    try {
+      const parsed = new URL(String(url || '').trim());
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+      const hostname = parsed.hostname.toLowerCase();
+      if (hostname === 'youtu.be' || hostname.endsWith('.youtu.be')) return parsed.pathname.split('/').filter(Boolean)[0] || '';
+      if (hostname !== 'youtube.com' && !hostname.endsWith('.youtube.com')) return '';
+      return parsed.searchParams.get('v') || parsed.pathname.match(/\/(?:embed|shorts|live)\/([^/?]+)/i)?.[1] || '';
+    } catch (error) { return ''; }
+  }
+  function isSupportedYouTubeReference(url) {
+    return Boolean(youtubeReferenceVideoId(url));
+  }
+  function referenceEmbedUrl(url) {
+    const value = String(url || '').trim();
+    try {
+      const parsed = new URL(value);
+      const hostname = parsed.hostname.toLowerCase();
+      let videoId = '';
+      if (hostname === 'youtu.be' || hostname.endsWith('.youtu.be')) videoId = parsed.pathname.split('/').filter(Boolean)[0] || '';
+      else if (hostname === 'youtube.com' || hostname.endsWith('.youtube.com')) {
+        videoId = parsed.searchParams.get('v') || parsed.pathname.match(/\/(?:embed|shorts|live)\/([^/?]+)/i)?.[1] || '';
+      }
+      if (videoId) return 'https://www.youtube.com/embed/' + encodeURIComponent(videoId);
+    } catch (error) {}
+    const youtube = value.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([^?&/]+)/i);
+    if (youtube) return `https://www.youtube.com/embed/${encodeURIComponent(youtube[1])}`;
+    const vimeo = value.match(/vimeo\.com\/(?:video\/)?(\d+)/i);
+    return vimeo ? `https://player.vimeo.com/video/${vimeo[1]}` : value;
+  }
+  function openReference(references, title = 'Referensi') {
+    const list = (Array.isArray(references) ? references : (String(references || '').trim() ? [{ name: 'YouTube', type: 'link', url: String(references).trim() }] : []))
+      .map((reference) => ({ ...reference, url: reference.url || reference.dataUrl || reference.data || '' }));
+    if (!list.length) return;
+    document.getElementById('reference-title').textContent = title;
+    currentReferenceFileSize = null;
+    const nextCacheIds = new Set(list.map((reference) => String(reference.id || referenceDriveFileId(reference.url) || '')).filter(Boolean));
+    referencePopupOpen = true;
+    activeReferenceCacheIds = nextCacheIds;
+    void updateReferenceCacheUsage();
+    void preloadReferenceMedia(list);
+    const requestId = ++referenceOpenRequestId;
+    const refDialog = document.getElementById('reference-dialog');
+    const tabs = document.getElementById('reference-tabs');
+    tabs.replaceChildren();
+    list.forEach((reference, index) => {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'reference-tab';
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(index === 0));
+      tab.textContent = reference.name || `Referensi ${index + 1}`;
+      tab.addEventListener('click', () => {
+        tabs.querySelectorAll('.reference-tab').forEach((button, buttonIndex) => button.setAttribute('aria-selected', String(buttonIndex === index)));
+        playReferenceEntry(reference, title, requestId);
+      });
+      tabs.append(tab);
+    });
+    refDialog.classList.remove('is-minimized');
+    const minimizeButton = document.getElementById('reference-minimize');
+    minimizeButton.setAttribute('aria-pressed', 'false');
+    minimizeButton.setAttribute('aria-label', 'Tampilan ringkas');
+    minimizeButton.title = 'Tampilan ringkas';
+    refDialog.style.left = '';
+    refDialog.style.top = '';
+    refDialog.style.right = '';
+    refDialog.style.bottom = '';
+    refDialog.style.zIndex = '';
+    refDialog.style.transform = '';
+    showReferenceFloating(refDialog);
+    playReferenceEntry(list[0], title, requestId);
+  }
+
+  async function playReferenceEntry(reference, title, requestId) {
+    const value = String(reference?.url || '').trim();
+    if (!value) return;
+    const playbackRequestId = ++referencePlaybackRequestId;
+    const refDialog = document.getElementById('reference-dialog');
+    hideReferenceFloating(refDialog);
+    stopReference();
+    if (referenceDriveObjectUrl) URL.revokeObjectURL(referenceDriveObjectUrl);
+    referenceDriveObjectUrl = '';
+    window.clearInterval(referenceSeekPoll);
+    referenceSeekPoll = 0;
+    const host = document.getElementById('reference-media');
+    host.replaceChildren(); referenceMedia = null; referenceEmbed = false; referenceEmbedPlaying = false;
+    currentReferenceFileSize = null;
+    currentReferenceIsStreaming = reference?.type !== 'file';
+    void updateReferenceCacheUsage();
+    referenceSeekInProgress = false;
+    updateReferenceSeek(0, 0);
+    showReferenceFloating(refDialog);
+    const referenceFileName = String(reference.fileName || reference.name || '');
+    const referenceFileExtension = referenceFileName.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() || '';
+    const referenceFileAudio = String(reference.mimeType || '').toLowerCase().startsWith('audio/') || /^(mp3|wav|m4a|aac|flac|ogg|oga|opus|wma)$/.test(referenceFileExtension);
+    const referenceFileVideo = String(reference.mimeType || '').toLowerCase().startsWith('video/') || /^(mp4|m4v|mov|webm|ogv|avi)$/.test(referenceFileExtension);
+    let type = reference.type === 'file'
+      ? (reference.mediaType === 'audio' || reference.mediaType === 'video' ? reference.mediaType : referenceFileAudio ? 'audio' : referenceFileVideo ? 'video' : 'drive')
+      : (isSupportedYouTubeReference(value) ? 'embed' : referenceMediaType(value));
+    if (requestId !== referenceOpenRequestId || playbackRequestId !== referencePlaybackRequestId) return;
+    const driveFileId = String(reference.id || referenceDriveFileId(value) || '');
+    let mediaSource = value;
+    if (driveFileId && reference.type === 'file') {
+      referenceTime.textContent = 'Mengunduh referensi…';
+      try {
+        const blob = await getReferenceMediaBlob(reference, driveFileId);
+        if (requestId !== referenceOpenRequestId || playbackRequestId !== referencePlaybackRequestId) return;
+        currentReferenceFileSize = blob.size;
+        void updateReferenceCacheUsage();
+        referenceDriveObjectUrl = URL.createObjectURL(blob);
+        mediaSource = referenceDriveObjectUrl;
+      } catch (error) {
+        const message = /Aksi tidak dikenali:\s*getReferenceMedia/i.test(error.message || '')
+          ? 'Backend Apps Script belum diperbarui. Deploy code.gs sebagai New version.'
+          : `Gagal mengunduh referensi: ${error.message || 'coba lagi.'}`;
+        if (playbackRequestId === referencePlaybackRequestId) referenceTime.textContent = message;
+        return;
+      }
+    }
+    if (type === 'embed') {
+      const frame = document.createElement('iframe');
+      const embedUrl = referenceEmbedUrl(value);
+      const originParam = /^https?:$/i.test(location.protocol) ? '&origin=' + encodeURIComponent(location.origin) : '';
+      frame.src = embedUrl + (embedUrl.includes('?') ? '&' : '?') + 'autoplay=0&enablejsapi=1&rel=0' + originParam;
+      frame.title = title; frame.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture'; frame.referrerPolicy = 'strict-origin-when-cross-origin'; frame.allowFullscreen = true;
+      frame.addEventListener('load', () => {
+        frame.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 'songbook-reference', channel: 'songbook-reference' }), '*');
+        frame.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['onStateChange'] }), '*');
+        requestReferenceEmbedSeek();
+        window.clearInterval(referenceSeekPoll);
+        referenceSeekPoll = window.setInterval(requestReferenceEmbedSeek, 500);
+      });
+      referenceMedia = frame; referenceEmbed = true; referenceEmbedPlaying = false; host.append(frame);
+    } else if (type === 'audio' || type === 'video' || type === 'drive') {
+      const initialType = type === 'drive' ? 'video' : type;
+      referenceMedia = document.createElement(initialType === 'audio' ? 'audio' : 'video');
+      referenceMedia.src = driveFileId && reference.type === 'file' ? mediaSource : referenceMediaUrl(value); referenceMedia.controls = true; referenceMedia.autoplay = false; referenceMedia.preload = 'metadata';
+      if (initialType === 'video') referenceMedia.playsInline = true;
+      if (driveFileId && reference.type === 'file') referenceMedia.addEventListener('error', () => { referenceTime.textContent = `File referensi tidak didukung (kode ${referenceMedia.error?.code || '?'})`; }, { once: true });
+      host.append(referenceMedia);
+      bindReferenceNativeSeek(referenceMedia);
+    } else {
+      const frame = document.createElement('iframe');
+      frame.src = value;
+      frame.title = reference.name || title;
+      frame.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
+      frame.referrerPolicy = 'strict-origin-when-cross-origin';
+      frame.allowFullscreen = true;
+      referenceMedia = frame;
+      referenceEmbed = false;
+      host.append(frame);
+    }
+    document.getElementById('reference-title').textContent = title;
+    const nativeControlsEnabled = referenceEmbed || typeof referenceMedia?.play === 'function';
+    document.getElementById('reference-play').disabled = !nativeControlsEnabled;
+    document.getElementById('reference-pause').disabled = !nativeControlsEnabled;
+    document.getElementById('reference-stop').disabled = !nativeControlsEnabled;
+    showReferenceFloating(refDialog);
+  }
+  function stopReference() { if (!referenceMedia) return; if (referenceEmbed) referenceMedia.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'stopVideo', args: [] }), '*'); else if (typeof referenceMedia.pause === 'function') { referenceMedia.pause(); if ('currentTime' in referenceMedia) referenceMedia.currentTime = 0; } referenceEmbedPlaying = false; updateReferenceSeek(0, referenceSeekDuration); }
+  function moveReferenceElement(element, parent) {
+    if (element.parentElement === parent) return;
+    if (typeof parent.moveBefore === 'function') parent.moveBefore(element, null);
+    else parent.append(element);
+  }
+  function placeReferenceLayer(element) {
+    const dialogs = [...document.querySelectorAll('dialog[open]')];
+    moveReferenceElement(element, dialogs[dialogs.length - 1] || document.body);
+  }
+  function showReferenceFloating(element) {
+    element.hidden = false;
+    placeReferenceLayer(element);
+  }
+  function hideReferenceFloating(element) {
+    element.hidden = true;
+    moveReferenceElement(element, document.body);
+  }
+  function closeReference() {
+    referenceOpenRequestId++;
+    referencePlaybackRequestId++;
+    referencePopupOpen = false;
+    activeReferenceCacheIds = new Set();
+    stopReference();
+    if (referenceDriveObjectUrl) URL.revokeObjectURL(referenceDriveObjectUrl);
+    referenceDriveObjectUrl = '';
+    window.clearInterval(referenceSeekPoll);
+    referenceSeekPoll = 0;
+    const refDialog = document.getElementById('reference-dialog');
+    refDialog.classList.remove('is-minimized');
+    hideReferenceFloating(refDialog);
+  }
+
   function openPreviewAt(index) {
     if (index < 0 || index >= currentPreviewSongs.length) return;
     openSong(currentPreviewSongs[index], currentPreviewSongs, index, true, currentPreviewFromCollection);
@@ -3675,6 +4439,111 @@
   document.getElementById('preview-add-to-my-songs').addEventListener('click', () => {
     if (currentPreviewSong) addSongToMySongs(currentPreviewSong, currentPreviewSong.id);
   });
+  document.getElementById('preview-reference').addEventListener('click', (event) => {
+    let references = [];
+    try { references = JSON.parse(event.currentTarget.dataset.references || '[]'); } catch (error) {}
+    openReference(references, document.getElementById('dialog-title').textContent);
+  });
+  document.getElementById('reference-close').addEventListener('click', closeReference);
+  document.getElementById('clear-reference-cache').addEventListener('click', async () => {
+    const button = document.getElementById('clear-reference-cache');
+    button.disabled = true;
+    try {
+      referenceCacheClearGeneration++;
+      referencePlaybackRequestId++;
+      stopReference();
+      if (referenceDriveObjectUrl) URL.revokeObjectURL(referenceDriveObjectUrl);
+      referenceDriveObjectUrl = '';
+      if (referenceMedia && !referenceEmbed && typeof referenceMedia.pause === 'function') {
+        referenceMedia.pause();
+        referenceMedia.removeAttribute('src');
+        referenceMedia.load?.();
+      }
+      document.getElementById('reference-media').replaceChildren();
+      referenceMedia = null;
+      referenceEmbed = false;
+      currentReferenceFileSize = null;
+      currentReferenceIsStreaming = false;
+      window.clearInterval(referenceSeekPoll);
+      referenceSeekPoll = 0;
+      document.getElementById('reference-play').disabled = true;
+      document.getElementById('reference-pause').disabled = true;
+      document.getElementById('reference-stop').disabled = true;
+      updateReferenceSeek(0, 0);
+      await clearAllReferenceCache();
+      await updateReferenceCacheUsage();
+    } catch (error) {
+      window.alert(`Cache referensi gagal dibersihkan: ${error.message || 'coba lagi.'}`);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.getElementById('reference-stop').addEventListener('click', stopReference);
+  document.getElementById('reference-play').addEventListener('click', () => {
+    if (!referenceMedia) return;
+    if (referenceEmbed) { referenceEmbedPlaying = true; referenceMedia.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'); }
+    else if (typeof referenceMedia.play === 'function') referenceMedia.play().catch(() => {});
+  });
+  document.getElementById('reference-pause').addEventListener('click', () => {
+    if (!referenceMedia) return;
+    if (referenceEmbed) { referenceEmbedPlaying = false; referenceMedia.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'); }
+    else if (typeof referenceMedia.pause === 'function') referenceMedia.pause();
+  });
+  document.getElementById('reference-minimize').addEventListener('click', () => {
+    const refDialog = document.getElementById('reference-dialog');
+    const isMinimized = !refDialog.classList.contains('is-minimized');
+    refDialog.classList.toggle('is-minimized', isMinimized);
+    const button = document.getElementById('reference-minimize');
+    button.setAttribute('aria-pressed', String(isMinimized));
+    button.setAttribute('aria-label', isMinimized ? 'Tampilan lengkap' : 'Tampilan ringkas');
+    button.title = isMinimized ? 'Tampilan lengkap' : 'Tampilan ringkas';
+    if (!isMinimized) {
+      refDialog.style.left = '';
+      refDialog.style.top = '';
+      refDialog.style.right = '';
+      refDialog.style.bottom = '';
+      refDialog.style.transform = '';
+      showReferenceFloating(refDialog);
+      return;
+    }
+    showReferenceFloating(refDialog);
+  });
+  const referenceHeader = document.querySelector('#reference-dialog .reference-header');
+  let referenceDrag = null;
+  referenceHeader.addEventListener('pointerdown', (event) => {
+    const refDialog = document.getElementById('reference-dialog');
+    if (refDialog.hidden || !refDialog.classList.contains('is-minimized') || event.target.closest('button, input')) return;
+    const rect = refDialog.getBoundingClientRect();
+    refDialog.style.left = rect.left + 'px';
+    refDialog.style.top = rect.top + 'px';
+    refDialog.style.right = 'auto';
+    refDialog.style.bottom = 'auto';
+    refDialog.style.transform = 'none';
+    referenceDrag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
+    referenceHeader.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  referenceHeader.addEventListener('pointermove', (event) => {
+    if (!referenceDrag || event.pointerId !== referenceDrag.id) return;
+    const refDialog = document.getElementById('reference-dialog');
+    const maxLeft = Math.max(0, window.innerWidth - refDialog.offsetWidth);
+    const maxTop = Math.max(0, window.innerHeight - refDialog.offsetHeight);
+    refDialog.style.left = Math.max(0, Math.min(maxLeft, referenceDrag.left + event.clientX - referenceDrag.x)) + 'px';
+    refDialog.style.top = Math.max(0, Math.min(maxTop, referenceDrag.top + event.clientY - referenceDrag.y)) + 'px';
+  });
+  referenceHeader.addEventListener('pointerup', (event) => {
+    if (referenceDrag && event.pointerId === referenceDrag.id) {
+      referenceHeader.releasePointerCapture(event.pointerId);
+      referenceDrag = null;
+    }
+  });
+  referenceHeader.addEventListener('pointercancel', () => { referenceDrag = null; });
+  const referenceTopLayerObserver = new MutationObserver((mutations) => {
+    if (!mutations.some((mutation) => mutation.target instanceof HTMLDialogElement)) return;
+    const refDialog = document.getElementById('reference-dialog');
+    if (!refDialog.hidden) placeReferenceLayer(refDialog);
+  });
+  referenceTopLayerObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
 
   document.getElementById('close-dialog').addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => document.body.classList.remove('song-reader-open'));
@@ -3759,15 +4628,86 @@
   fullScoreImage.addEventListener('click', showScoreImageControls);
   scoreImageDialog.addEventListener('touchstart', (event) => {
     showScoreImageControls();
-    if (event.touches.length === 1) scoreSwipeStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
-  }, { passive: true });
+    if (event.target.closest('button, .score-image-instruments')) return;
+    if (event.touches.length === 2) {
+      event.preventDefault();
+      const first = event.touches[0];
+      const second = event.touches[1];
+      scoreImagePinchStart = {
+        distance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        zoom: scoreImageZoom,
+        panX: scoreImagePanX,
+        panY: scoreImagePanY,
+        focusX: (first.clientX + second.clientX) / 2,
+        focusY: (first.clientY + second.clientY) / 2
+      };
+      scoreImagePanStart = null;
+      scoreSwipeStart = null;
+      return;
+    }
+    if (event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    if (scoreImageZoom > 1.001 && event.target === fullScoreImage) {
+      event.preventDefault();
+      scoreImagePanStart = { x: touch.clientX, y: touch.clientY, panX: scoreImagePanX, panY: scoreImagePanY };
+      scoreSwipeStart = null;
+    } else if (scoreImageZoom <= 1.001) {
+      scoreSwipeStart = { x: touch.clientX, y: touch.clientY };
+    }
+  }, { passive: false });
+  scoreImageDialog.addEventListener('touchmove', (event) => {
+    if (scoreImagePinchStart && event.touches.length === 2) {
+      event.preventDefault();
+      const first = event.touches[0];
+      const second = event.touches[1];
+      const distance = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const centerX = (first.clientX + second.clientX) / 2;
+      const centerY = (first.clientY + second.clientY) / 2;
+      const start = scoreImagePinchStart;
+      const zoom = Math.max(1, Math.min(5, start.zoom * distance / Math.max(start.distance, 1)));
+      const viewportWidth = scoreImageDialog.clientWidth || window.innerWidth;
+      const viewportHeight = scoreImageDialog.clientHeight || window.innerHeight;
+      const imageFocusX = (start.focusX - viewportWidth / 2 - start.panX) / start.zoom;
+      const imageFocusY = (start.focusY - viewportHeight / 2 - start.panY) / start.zoom;
+      setScoreImageZoom(
+        zoom,
+        centerX - viewportWidth / 2 - imageFocusX * zoom,
+        centerY - viewportHeight / 2 - imageFocusY * zoom
+      );
+      return;
+    }
+    if (scoreImagePanStart && event.touches.length === 1 && scoreImageZoom > 1.001) {
+      event.preventDefault();
+      const touch = event.touches[0];
+      setScoreImageZoom(scoreImageZoom, scoreImagePanStart.panX + touch.clientX - scoreImagePanStart.x, scoreImagePanStart.panY + touch.clientY - scoreImagePanStart.y);
+    }
+  }, { passive: false });
   scoreImageDialog.addEventListener('click', showScoreImageControls);
   scoreImageDialog.addEventListener('touchend', (event) => {
-    if (!scoreSwipeStart || !event.changedTouches.length) return;
+    if (scoreImagePinchStart) {
+      if (event.touches.length < 2) {
+        scoreImagePinchStart = null;
+        scoreSwipeStart = null;
+        scoreImagePanStart = event.touches.length === 1 && scoreImageZoom > 1.001
+          ? { x: event.touches[0].clientX, y: event.touches[0].clientY, panX: scoreImagePanX, panY: scoreImagePanY }
+          : null;
+      }
+      return;
+    }
+    if (scoreImagePanStart) {
+      if (!event.touches.length) scoreImagePanStart = null;
+      return;
+    }
+    if (!scoreSwipeStart || !event.changedTouches.length || scoreImageZoom > 1.001) return;
     const dx = event.changedTouches[0].clientX - scoreSwipeStart.x;
     const dy = event.changedTouches[0].clientY - scoreSwipeStart.y;
     scoreSwipeStart = null;
     if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.25) moveFullScoreImage(dx < 0 ? 1 : -1);
+  }, { passive: false });
+  scoreImageDialog.addEventListener('touchcancel', () => {
+    scoreSwipeStart = null;
+    scoreImagePinchStart = null;
+    scoreImagePanStart = null;
   }, { passive: true });
   scoreImageDialog.addEventListener('keydown', (event) => {
     if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') showScoreImageControls();
