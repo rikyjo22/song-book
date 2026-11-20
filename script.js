@@ -2,7 +2,7 @@
   'use strict';
 
   // Pemutaran file Drive memakai endpoint media yang tersedia di backend manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbxtoAKUF9trCzK7lR_yDdnuFYGbU2AO83ZBRbKaJieyT0TxozCKc13r1xm1rkaYfIS5Eg/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbzIiL9D0EUy4-trC_cAmuD9LsVd4vqz5M3nATwJJSAR7ykl3fWx1fho_ZE-RJWNIKL9jw/exec';
   const CACHE_KEY = 'song-book:songs:v4';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
@@ -114,8 +114,8 @@
   let songs = [];
   let mySongs = [];
   let activeCategory = 'ALL';
-  let collectionSort = 'number';
-  let mySongsSort = 'number';
+  let collectionSort = 'number-asc';
+  let mySongsSort = 'number-asc';
   let preferredInstrument = readInstrumentProfile();
   let preferredUserName = readProfileUserName();
   let preferredUserId = readProfileUserId();
@@ -1972,10 +1972,18 @@
       || compareSongNumbers(a, b);
   }
 
+  function songInputTime(song) {
+    const value = song.createdAt || song.created_at || song.storedAt || song.localUpdatedAt || 0;
+    const timestamp = typeof value === 'number' ? value : Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+
   function sortSongsForDisplay(list, mode) {
     const sorted = [...list];
     if (mode === 'title-asc') return sorted.sort(compareSongTitles);
     if (mode === 'title-desc') return sorted.sort((a, b) => compareSongTitles(b, a));
+    if (mode === 'number-desc') return sorted.sort((a, b) => compareSongNumbers(b, a));
+    if (mode === 'last-update') return sorted.sort((a, b) => songInputTime(b) - songInputTime(a) || compareSongNumbers(a, b));
     return sorted.sort(compareSongNumbers);
   }
 
@@ -2112,7 +2120,7 @@
     renderMySongs();
   });
   mySongsSortSelect.addEventListener('change', () => {
-    mySongsSort = mySongsSortSelect.value || 'number';
+    mySongsSort = mySongsSortSelect.value || 'number-asc';
     renderMySongs();
   });
   collectionCategoryFilter.addEventListener('change', () => {
@@ -2121,7 +2129,7 @@
     renderList();
   });
   collectionSortSelect.addEventListener('change', () => {
-    collectionSort = collectionSortSelect.value || 'number';
+    collectionSort = collectionSortSelect.value || 'number-asc';
     renderList();
   });
   [collectionActiveSchedule, mySongsActiveSchedule].filter(Boolean).forEach((container) => {
@@ -2341,6 +2349,7 @@
       references: Array.isArray(sourceSong.references) ? JSON.parse(JSON.stringify(sourceSong.references)) : [],
       contentHtml: normalizeSongContentHtml(sourceSong.contentHtml),
       images: sourceSong.images && typeof sourceSong.images === 'object' ? JSON.parse(JSON.stringify(sourceSong.images)) : {},
+      createdAt: now,
       storedAt: now,
       localUpdatedAt: now
     };
@@ -2726,6 +2735,7 @@
         references,
         contentHtml: editableTextToHtml(document.getElementById('my-song-content').value),
         images,
+        createdAt: editingMySong?.createdAt || editingMySong?.storedAt || Date.now(),
         storedAt: editingMySong?.storedAt || Date.now(),
         localUpdatedAt: Date.now()
       };
