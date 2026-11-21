@@ -2,7 +2,7 @@
   'use strict';
 
   // Pemutaran file Drive memakai endpoint media yang tersedia di backend manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbzIiL9D0EUy4-trC_cAmuD9LsVd4vqz5M3nATwJJSAR7ykl3fWx1fho_ZE-RJWNIKL9jw/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxYErAtW6biQjLZBcp08NPl3CVV67hSHkWlHiMhpsbabTUKNOdeqx1zJpJRuwULKVfRuQ/exec';
   const CACHE_KEY = 'song-book:songs:v4';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
@@ -105,6 +105,7 @@
   const scoreImagePrevious = document.getElementById('score-image-previous');
   const scoreImageNext = document.getElementById('score-image-next');
   const scoreImageInstruments = document.getElementById('score-image-instruments');
+  const scoreImageReferenceButton = document.getElementById('score-image-reference-button');
   const scoreImagePosition = document.getElementById('score-image-position');
   const scoreIntroBackButton = document.getElementById('score-intro-back-button');
   const scorePreviousGeneralSongButton = document.getElementById('score-previous-general-song-button');
@@ -249,6 +250,12 @@
   requiredProfileDialog.addEventListener('click', (event) => {
     if (event.target === requiredProfileDialog) event.preventDefault();
   });
+  requiredProfileDialog.addEventListener('close', () => {
+    if (readProfileUserName()) return;
+    window.setTimeout(() => {
+      if (!requiredProfileDialog.open && !readProfileUserName()) openRequiredProfile();
+    }, 0);
+  });
   function setStatus(message) { status.textContent = message; }
   function setSyncStatus(message) { syncStatus.textContent = message; if (document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView === 'collection' && typeof updateHeaderIdentity === 'function') updateHeaderIdentity('collection'); }
   function formatTempo(value) {
@@ -260,6 +267,26 @@
     const number = String(value || '').trim();
     return number.match(/\d+/)?.[0] || '';
   }
+  function songReferenceCount(song) {
+    return getSongReferences(song).length;
+  }
+  function matchesSongCategoryFilter(song, selectedCategory) {
+    if (selectedCategory === 'WITH_REFERENCE') return songReferenceCount(song) > 0;
+    return selectedCategory === 'ALL' || song.category === selectedCategory;
+  }
+  function getSongReferences(song) {
+    let references = song && (song.references ?? song.references_json ?? song.reference_json) || [];
+    if (typeof references === 'string') {
+      try { references = JSON.parse(references); } catch (error) { references = []; }
+    }
+    if (!Array.isArray(references)) references = [];
+    references = references.filter((reference) => reference && typeof reference === 'object');
+    const legacyUrl = String(song && (song.referenceUrl || song.reference_url) || '').trim();
+    if (legacyUrl && !references.some((reference) => reference.url === legacyUrl)) {
+      references.push({ name: 'YouTube', type: 'link', url: legacyUrl });
+    }
+    return references;
+  }
   function displaySongBookCode(song) {
     const value = String(song && song.category || '').trim();
     const category = CATEGORIES.find((entry) => entry.code === value
@@ -270,7 +297,9 @@
   function songIndexMarkup(song) {
     const bookCode = escapeText(displaySongBookCode(song));
     const number = escapeText(displaySongNumber(song && song.number));
-    return `<span class="song-index">${bookCode ? `<span class="song-index-category">${bookCode}</span>` : ''}<span class="song-index-number">${number || '&#9835;'}</span></span>`;
+    const referenceCount = songReferenceCount(song);
+    const referenceBadge = referenceCount ? `<span class="song-reference-count" aria-label="${referenceCount} referensi">${referenceCount}</span>` : '';
+    return `<span class="song-index">${bookCode ? `<span class="song-index-category">${bookCode}</span>` : ''}<span class="song-index-number">${number || '&#9835;'}</span>${referenceBadge}</span>`;
   }
   function songListMetaMarkup(song) {
     const key = song && song.key ? `<span class="song-key">${escapeText(song.key)}</span>` : '';
@@ -482,6 +511,12 @@
       }
       songs = Array.isArray(result.songs) ? result.songs : [];
       songs.sort(compareSongs);
+      if (forceFresh && readProfileUserName()) {
+        trackSuccessfulAction('collection_refresh_success', {
+          collection: 'Koleksi Lagu',
+          action: 'Perbarui koleksi lagu'
+        });
+      }
       const updatedAt = new Date().toISOString();
       try {
         localStorage.setItem(CACHE_KEY, JSON.stringify({ updatedAt, songs }));
@@ -2009,7 +2044,7 @@
     updateActiveScheduleInfo();
     const query = normalize(search.value.trim());
     const visible = sortSongsForDisplay(songs.filter((song) => {
-      if (activeCategory !== 'ALL' && song.category !== activeCategory) return false;
+      if (!matchesSongCategoryFilter(song, activeCategory)) return false;
       if (!query) return true;
       return normalize([song.category, song.number, song.title, song.key, song.genre, song.songCreator, song.dateCreate, song.tempo, stripHtml(song.contentHtml)].join(' ')).includes(query);
     }), collectionSort);
@@ -2033,7 +2068,8 @@
       const openButton = document.createElement('button');
       openButton.type = 'button';
       openButton.className = 'song-card-main';
-      openButton.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}`);
+      const referenceCount = songReferenceCount(song);
+      openButton.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}${referenceCount ? `, ${referenceCount} referensi` : ''}`);
       openButton.innerHTML = `${songIndex}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
       openButton.addEventListener('click', () => openSongFromList(song, songs, undefined, true));
       card.append(openButton);
@@ -2067,8 +2103,9 @@
     updateActiveScheduleInfo();
     const query = normalize(mySongsSearch.value.trim());
     const selectedCategory = mySongsCategoryFilter.value || 'ALL';
-    const visible = sortSongsForDisplay(mySongs.filter((song) => (selectedCategory === 'ALL' || song.category === selectedCategory)
-      && (!query || normalize([song.number, song.title, stripHtml(song.contentHtml)].join(' ')).includes(query))), mySongsSort);
+    const visibleSongs = mySongs.filter((song) => matchesSongCategoryFilter(song, selectedCategory)
+      && (!query || normalize([song.number, song.title, stripHtml(song.contentHtml)].join(' ')).includes(query)));
+    const visible = sortSongsForDisplay(visibleSongs, mySongsSort);
     mySongsCount.textContent = String(mySongs.length);
     mySongsList.classList.toggle('is-upload-request-mode', isMySongUploadMode);
     mySongsList.replaceChildren();
@@ -2097,7 +2134,8 @@
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'song-card-main';
-      button.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}`);
+      const referenceCount = songReferenceCount(song);
+      button.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}${referenceCount ? `, ${referenceCount} referensi` : ''}`);
       button.innerHTML = `${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
       button.addEventListener('click', () => openSongFromList(song, visible, index));
       card.append(button);
@@ -3068,16 +3106,7 @@
     const collectionActions = document.getElementById('collection-preview-actions');
     const addToScheduleButton = document.getElementById('preview-add-to-schedule');
     const referenceButton = document.getElementById('preview-reference');
-    let songReferences = song.references ?? song.references_json ?? song.reference_json ?? [];
-    if (typeof songReferences === 'string') {
-      try { songReferences = JSON.parse(songReferences); } catch (error) { songReferences = []; }
-    }
-    if (!Array.isArray(songReferences)) songReferences = [];
-    songReferences = songReferences.filter((reference) => reference && typeof reference === 'object');
-    const legacyReferenceUrl = String(song.referenceUrl || song.reference_url || '').trim();
-    if (legacyReferenceUrl && !songReferences.some((reference) => reference.url === legacyReferenceUrl)) {
-      songReferences.push({ name: 'YouTube', type: 'link', url: legacyReferenceUrl });
-    }
+    const songReferences = getSongReferences(song);
     const hasReference = songReferences.length > 0;
     collectionActions.hidden = !currentPreviewFromCollection && !hasReference;
     referenceButton.hidden = !hasReference;
@@ -3128,6 +3157,19 @@
   }
 
   function openSongFromList(song, queue = songs, queueIndex, fromCollection = false) {
+    if (fromCollection && !readProfileUserName()) {
+      openRequiredProfile('membuka lagu dari koleksi');
+      return;
+    }
+    if (fromCollection) {
+      trackSuccessfulAction('song_open_success', {
+        collection: 'Koleksi Lagu',
+        action: 'Buka lagu',
+        songTitle: displaySongTitle(song),
+        songCategory: String(song.category || ''),
+        songNumber: String(song.number || '')
+      });
+    }
     const index = Number.isInteger(queueIndex)
       ? queueIndex
       : queue.findIndex((item) => item === song || item.id === song.id);
@@ -3402,6 +3444,15 @@
     return true;
   }
 
+  function renderScoreImageReferenceButton() {
+    const references = scoreImageMode === 'intro' ? [] : getSongReferences(currentPreviewSong);
+    const count = references.length;
+    scoreImageReferenceButton.hidden = count === 0;
+    scoreImageReferenceButton.querySelector('.score-image-reference-count').textContent = String(count);
+    scoreImageReferenceButton.setAttribute('aria-label', `Buka ${count} referensi lagu`);
+    scoreImageReferenceButton.title = count ? `${count} referensi untuk ${currentPreviewSong?.title || 'lagu ini'}` : '';
+  }
+
   function clampScoreImagePan(x, y, zoom = scoreImageZoom) {
     const viewportWidth = scoreImageDialog.clientWidth || window.innerWidth;
     const viewportHeight = scoreImageDialog.clientHeight || window.innerHeight;
@@ -3466,6 +3517,7 @@
     fullScoreImage.dataset.attempt = '0';
     fullScoreImage.src = urls[0];
     const showingIntro = scoreImageMode === 'intro';
+    renderScoreImageReferenceButton();
     fullScoreImage.alt = showingIntro ? `Intro: ${activeScheduleIntro?.name || 'Intro'}` : `Partitur ${activeScoreInstrument}, halaman ${activeScoreIndex + 1}`;
     scoreImagePosition.textContent = `${activeScoreIndex + 1} / ${activeScoreFiles.length}`;
     const multiple = !showingIntro && activeScoreFiles.length > 1;
@@ -3757,25 +3809,27 @@
   }
 
   function parseNumberChord(token) {
-    const match = token.match(/^([b#]?)([1-7])([b#]?)([^/]*?)(?:\/([b#]?)([1-7])([b#]?))?$/i);
+    const match = token.match(/^(-|([b#]?)([1-7])([b#]?))([^/]*?)(?:\/(-|([b#]?)([1-7])([b#]?)))?$/i);
     if (!match) return null;
-    const bass = match[6] ? `${match[5] || match[7]}${match[6]}` : '';
+    const root = match[1] === '-' ? '-' : `${match[2] || match[4] || ''}${match[3]}`;
+    const bass = match[6] ? (match[6] === '-' ? '-' : `${match[7] || match[9] || ''}${match[8]}`) : '';
     return {
-      accidental: match[1] || match[3],
-      degree: Number(match[2]),
-      quality: match[4],
+      root,
+      accidental: match[2] || match[4] || '',
+      degree: match[3] ? Number(match[3]) : null,
+      quality: match[5],
       bass
     };
   }
 
   function parseLetterChord(token) {
-    const match = token.match(/^([A-G])([#b]?)([^/]*)(?:\/([A-G][#b]?))?$/i);
+    const match = token.match(/^(-|([A-G])([#b]?))([^/]*)(?:\/(-|([A-G][#b]?)))?$/i);
     if (!match) return null;
-    const quality = match[3];
+    const quality = match[4];
     // Do not treat ordinary words beginning with A-G as chords (for example,
     // "Belum", "ada", and "data" in empty-state messages).
     if (quality && !/^(?:(?:maj|min|m|sus|dim|aug|add|omit|o|M|\+)?(?:2|4|5|6|7|9|11|13)?(?:sus[24])?(?:\([#b]?\d+\))?(?:[#b]?\d+)*)$/i.test(quality)) return null;
-    return { root: `${match[1].toUpperCase()}${match[2]}`, quality, bass: match[4] || '' };
+    return { root: match[1] === '-' ? '-' : `${match[2].toUpperCase()}${match[3]}`, quality, bass: match[5] === '-' ? '-' : match[6] || '' };
   }
 
   function degreePitch(degree, key, accidental = '') {
@@ -3786,21 +3840,26 @@
   function numericToLetter(token, key) {
     const chord = parseNumberChord(token);
     if (!chord) return token;
-    const scale = scaleFor(key);
-    const minor = parseKey(key).minor;
-    const defaultQualities = minor ? ['m', 'dim', '', 'm', 'm', '', ''] : ['', 'm', 'm', '', '', 'm', 'dim'];
+    if (chord.root === '-') {
+      const bassMatch = chord.bass.match(/^([b#]?)([1-7])$/);
+      const bass = bassMatch ? `/${spellScaleDegree(Number(bassMatch[2]), key, bassMatch[1])}` : chord.bass ? `/${chord.bass}` : '';
+      return `-${chord.quality}${bass}`;
+    }
     const qualityAliases = { M: 'maj', m: 'm', o: 'dim', '+': 'aug' };
-    const rawQuality = chord.quality || (chord.accidental ? '' : defaultQualities[chord.degree - 1]);
-    const quality = rawQuality.replace(/^(M|m|o|\+)/, (alias) => qualityAliases[alias] || alias);
+    const quality = chord.quality.replace(/^(M|m|o|\+)/, (alias) => qualityAliases[alias] || alias);
     const root = spellScaleDegree(chord.degree, key, chord.accidental);
     const bassMatch = chord.bass.match(/^([b#]?)([1-7])$/);
-    const bass = bassMatch ? `/${spellScaleDegree(Number(bassMatch[2]), key, bassMatch[1])}` : '';
+    const bass = bassMatch ? `/${spellScaleDegree(Number(bassMatch[2]), key, bassMatch[1])}` : chord.bass === '-' ? '/-' : '';
     return `${root}${quality}${bass}`;
   }
 
   function letterToNumeric(token, key) {
     const chord = parseLetterChord(token);
     if (!chord) return token;
+    if (chord.root === '-') {
+      const bass = chord.bass && chord.bass !== '-' ? `/${letterToNumeric(chord.bass, key)}` : chord.bass ? '/-' : '';
+      return `-${chord.quality}${bass}`;
+    }
     const rootPitch = parseKey(chord.root).pitch;
     const scale = scaleFor(key);
     let degreeText = String((scale.indexOf(rootPitch) + 1) || 1);
@@ -3818,9 +3877,12 @@
   function transposeLetterChord(token, fromKey, toKey) {
     const chord = parseLetterChord(token);
     if (!chord) return token;
+    if (chord.root === '-') {
+      return `-${chord.quality}${chord.bass && chord.bass !== '-' ? `/${transposeLetterChord(chord.bass, fromKey, toKey)}` : chord.bass ? '/-' : ''}`;
+    }
     const shift = parseKey(toKey).pitch - parseKey(fromKey).pitch;
     const root = pitchName(parseKey(chord.root).pitch + shift, toKey);
-    const bass = chord.bass ? `/${pitchName(parseKey(chord.bass).pitch + shift, toKey)}` : '';
+    const bass = chord.bass && chord.bass !== '-' ? `/${pitchName(parseKey(chord.bass).pitch + shift, toKey)}` : chord.bass ? '/-' : '';
     return `${root}${chord.quality}${bass}`;
   }
 
@@ -4581,6 +4643,7 @@
     scoreImageDialog.classList.remove('controls-hidden');
     scoreImageDialog.classList.remove('instrument-controls-hidden');
     scoreImageInstruments.hidden = true;
+    scoreImageReferenceButton.hidden = true;
     scoreImageMode = 'score';
     scoreViewerFromList = false;
     activeScheduleIntro = null;
@@ -4602,6 +4665,11 @@
   });
   scoreImagePrevious.addEventListener('click', () => moveFullScoreImage(-1));
   scoreImageNext.addEventListener('click', () => moveFullScoreImage(1));
+  scoreImageReferenceButton.addEventListener('click', () => {
+    const references = getSongReferences(currentPreviewSong);
+    if (!references.length) return;
+    openReference(references, formatScoreSongLabel(currentPreviewSong) || 'Referensi');
+  });
   scoreImageInstruments.addEventListener('click', (event) => {
     const button = event.target.closest('.score-image-instrument-button');
     if (button) openFullScoreImage(button.dataset.instrument, 0, true);

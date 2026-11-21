@@ -1662,6 +1662,8 @@ button.my-song-upload-cancel[hidden]{display:none!important}
   font-weight:800;
   line-height:1.05;
 }
+.song-index{position:relative!important}
+.song-reference-count{position:absolute;top:-5px;right:-6px;display:grid;min-width:17px;height:17px;place-items:center;border:2px solid #fff;border-radius:999px;background:#d94b45;padding:0 4px;color:#fff;font:800 9px/1 'DM Sans',sans-serif;box-shadow:0 2px 5px #2222}
 @media(max-width:600px){
   .song-index-category{font-size:7px}
   .song-index-number{font-size:11px}
@@ -1803,3 +1805,7 @@ button.my-song-upload-cancel[hidden]{display:none!important}
 /* Pinch and pan only the full-screen score image; keep viewer controls fixed. */
 .score-image-dialog{overflow:hidden;touch-action:none}
 #score-image-full{transform:translate3d(var(--score-image-pan-x,0px),var(--score-image-pan-y,0px),0) scale(var(--score-image-zoom,1));transform-origin:center center;touch-action:none;user-select:none;-webkit-user-drag:none;will-change:transform}
+
+.score-image-reference-button{position:fixed;bottom:max(14px,env(safe-area-inset-bottom));left:50%;z-index:5;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;transform:translateX(-50%);border:1px solid #e1b1ee;border-radius:22px;background:rgba(91,42,111,.48);padding:0 14px;color:#fff;font-size:11px;font-weight:800;text-shadow:0 1px 2px #24102b;box-shadow:0 4px 16px #0005;backdrop-filter:blur(5px);white-space:nowrap;transition:opacity .2s ease}.score-image-reference-button:hover{border-color:#f1d4f8;background:rgba(116,52,140,.68)}.score-image-reference-button[hidden]{display:none!important}.score-image-reference-count{display:inline-grid;min-width:19px;height:19px;place-items:center;border-radius:999px;background:#fff;padding:0 5px;color:#71368a;font-size:10px;line-height:1;text-shadow:none}.score-image-dialog.controls-hidden .score-image-reference-button{opacity:0;pointer-events:none}
+
+#reference-dialog #reference-close{border:2px solid #71368a!important;box-shadow:0 0 0 1px #71368a;font-size:20px;font-weight:900;-webkit-text-stroke:.7px currentColor}
