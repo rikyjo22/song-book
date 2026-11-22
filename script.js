@@ -17,6 +17,8 @@
   const THEME_CHOICE_KEY = 'song-book:theme-choice:v1';
   const FONT_STYLE_KEY = 'song-book:font-style:v1';
   const FONT_SIZE_KEY = 'song-book:font-size:v1';
+  const KEY_WATERMARK_SETTINGS_KEY = 'song-book:key-watermark-settings:v1';
+  const SIDEBAR_ORDER_KEY = 'song-book:sidebar-order:v1';
   // Use the same picker in every browser; native date controls differ widely.
   const DATE_INPUT_TYPE = 'text';
   const CATEGORIES = [
@@ -107,6 +109,11 @@
   const scoreImageInstruments = document.getElementById('score-image-instruments');
   const scoreImageReferenceButton = document.getElementById('score-image-reference-button');
   const scoreImagePosition = document.getElementById('score-image-position');
+  const scoreKeyWatermark = document.getElementById('score-key-watermark');
+  const scoreKeyWatermarkValue = document.getElementById('score-key-watermark-value');
+  const keyWatermarkDialog = document.getElementById('key-watermark-dialog');
+  const keyWatermarkForm = document.getElementById('key-watermark-form');
+  const keyWatermarkPreview = document.getElementById('key-watermark-preview');
   const scoreIntroBackButton = document.getElementById('score-intro-back-button');
   const scorePreviousGeneralSongButton = document.getElementById('score-previous-general-song-button');
   const scoreGeneralSongPosition = document.getElementById('score-general-song-position');
@@ -115,8 +122,8 @@
   let songs = [];
   let mySongs = [];
   let activeCategory = 'ALL';
-  let collectionSort = 'number-asc';
-  let mySongsSort = 'number-asc';
+  let collectionSort = 'title-asc';
+  let mySongsSort = 'title-asc';
   let preferredInstrument = readInstrumentProfile();
   let preferredUserName = readProfileUserName();
   let preferredUserId = readProfileUserId();
@@ -132,6 +139,7 @@
   let instrumentOptionsLoaded = false;
   let mySongInstrumentNames = [];
   let cacheAvailable = false;
+  let cachedSongsUpdatedAt = null;
   let isLoadingSongs = false;
   let schedules = [];
   let schedulesDisabled = false;
@@ -155,6 +163,9 @@
   let activeScoreIndex = 0;
   let scoreImageMode = 'score';
   let activeScheduleIntro = null;
+  let activeWorshipKeyWatermarkEnabled = false;
+  let activeWorshipKeyWatermarkSettings = null;
+  let preferredKeyWatermarkSettings = readKeyWatermarkSettings();
   let scoreImageReturnTarget = 'lyrics';
   let scoreControlsHideTimer = 0;
   let scoreSwipeStart = null;
@@ -191,6 +202,8 @@
   const fontStyleSelect = document.getElementById('font-style-select');
   const fontSizeSelect = document.getElementById('font-size-select');
   const fontSizeValue = document.getElementById('font-size-value');
+  const keyWatermarkSettingsButton = document.getElementById('open-key-watermark-settings');
+  const scheduleKeyWatermarkEnabledInput = document.getElementById('schedule-key-watermark-enabled');
   const themeChoiceField = document.getElementById('theme-choice-field');
   let profileSaveFeedbackTimer = 0;
   const fontSizeBaselines = new WeakMap();
@@ -415,7 +428,7 @@
     fontSizeScaledElements.clear();
     // Scale the actual text-bearing elements instead of only the first layer of
     // each screen. This also covers dialogs and content rendered after startup.
-    const excluded = 'script, style, svg, path, circle, ellipse, line, polyline, polygon, rect, use, .song-content pre, .my-song-add-action, #song-list .add-to-schedule';
+    const excluded = 'script, style, svg, path, circle, ellipse, line, polyline, polygon, rect, use, .song-content pre, .my-song-add-action, #song-list .add-to-schedule, #score-key-watermark, #score-key-watermark-value, #key-watermark-preview, #key-watermark-preview *';
     const scalableElements = [];
     document.querySelectorAll('body *').forEach((element) => {
       if (element.matches(excluded) || element.closest(excluded)) return;
@@ -477,7 +490,7 @@
     });
   }
 
-  function loadSongs(forceFresh = false) {
+  function loadSongs(forceFresh = false, trackRefresh = true) {
     if (isLoadingSongs) return;
     isLoadingSongs = true;
     setSyncStatus('Mengambil data terbaru dari database...');
@@ -511,13 +524,14 @@
       }
       songs = Array.isArray(result.songs) ? result.songs : [];
       songs.sort(compareSongs);
-      if (forceFresh && readProfileUserName()) {
+      if (forceFresh && trackRefresh && readProfileUserName()) {
         trackSuccessfulAction('collection_refresh_success', {
           collection: 'Koleksi Lagu',
           action: 'Perbarui koleksi lagu'
         });
       }
       const updatedAt = new Date().toISOString();
+      cachedSongsUpdatedAt = updatedAt;
       try {
         localStorage.setItem(CACHE_KEY, JSON.stringify({ updatedAt, songs }));
         cacheAvailable = true;
@@ -627,6 +641,7 @@
       if (!cached || !Array.isArray(cached.songs)) return;
       songs = cached.songs;
       songs.sort(compareSongs);
+      cachedSongsUpdatedAt = cached.updatedAt || null;
       cacheAvailable = true;
       count.textContent = String(songs.length);
       if (document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView === 'collection') updateHeaderIdentity('collection');
@@ -639,6 +654,11 @@
       cacheAvailable = false;
     }
     return false;
+  }
+
+  function isSongCacheOlderThanOneDay(updatedAt) {
+    const timestamp = Date.parse(updatedAt || '');
+    return !Number.isFinite(timestamp) || Date.now() - timestamp >= 24 * 60 * 60 * 1000;
   }
 
   function formatUpdatedAt(value) {
@@ -760,6 +780,38 @@
     } catch (error) { return {}; }
   }
 
+  function defaultKeyWatermarkSettings() {
+    return { showKey: true, showGenre: true, showNote: true, fontSize: 19, genreFontSize: 6, noteFontSize: 5, transparency: 45, color: '#176b4b', genreColor: '#176b4b', noteColor: '#176b4b', outlineWidth: 0, outlineColor: '#000000', outlinePosition: 'outer', shadowWidth: 2, shadowColor: '#000000', shadowX: 0, shadowY: 2, shadowBlur: 9 };
+  }
+
+  function readKeyWatermarkSettings() {
+    try { return normalizeKeyWatermarkSettings(JSON.parse(localStorage.getItem(KEY_WATERMARK_SETTINGS_KEY) || 'null')); }
+    catch (error) { return defaultKeyWatermarkSettings(); }
+  }
+
+  function saveKeyWatermarkSettings(value) {
+    preferredKeyWatermarkSettings = normalizeKeyWatermarkSettings(value);
+    try { localStorage.setItem(KEY_WATERMARK_SETTINGS_KEY, JSON.stringify(preferredKeyWatermarkSettings)); }
+    catch (error) { console.warn('Pengaturan watermark tidak dapat disimpan di perangkat ini:', error); }
+    return preferredKeyWatermarkSettings;
+  }
+
+  function normalizeKeyWatermarkSettings(value) {
+    const defaults = defaultKeyWatermarkSettings();
+    const source = value && typeof value === 'object' ? value : {};
+    const normalized = Object.fromEntries(Object.entries(defaults).map(([name, fallback]) => {
+      if (name === 'color' || name === 'genreColor' || name === 'noteColor' || name === 'outlineColor' || name === 'shadowColor') return [name, /^#[0-9a-f]{6}$/i.test(String(source[name] || '')) ? String(source[name]) : fallback];
+      if (name === 'showKey' || name === 'showGenre' || name === 'showNote') return [name, source[name] === undefined ? fallback : Boolean(source[name])];
+      if (name === 'outlinePosition') return [name, source[name] === 'inner' ? 'inner' : 'outer'];
+      const number = Number(source[name]);
+      return [name, Number.isFinite(number) ? number : fallback];
+    }));
+    normalized.transparency = Math.max(0, Math.min(100, normalized.transparency));
+    normalized.genreFontSize = Math.max(2, Math.min(20, normalized.genreFontSize));
+    normalized.noteFontSize = Math.max(2, Math.min(20, normalized.noteFontSize));
+    return normalized;
+  }
+
   function persistScheduleIntroCache() {
     try { localStorage.setItem(SCHEDULE_INTRO_CACHE_KEY, JSON.stringify(scheduleIntros)); }
     catch (error) { console.warn('Cache intro jadwal tidak dapat disimpan:', error); }
@@ -788,10 +840,12 @@
         title: String(item.title || 'Ibadah Baru'),
         date: String(item.date || ''),
         compactView: item.compactView === undefined ? true : Boolean(item.compactView),
+        keyWatermarkEnabled: item.keyWatermarkEnabled === undefined ? true : Boolean(item.keyWatermarkEnabled),
+        keyWatermarkSettings: normalizeKeyWatermarkSettings(item.keyWatermarkSettings),
         isOpen: Boolean(item.isOpen),
         sharedIntro: item.sharedIntro && typeof item.sharedIntro === 'object' ? item.sharedIntro : null,
         pulledBy: Array.isArray(item.pulledBy) ? item.pulledBy.map((name) => String(name || '').trim()).filter(Boolean) : [],
-        songs: Array.isArray(item.songs) ? item.songs.filter((song) => song && typeof song.id === 'string').map((song, index) => ({ ...song, entryId: String(song.entryId || `entry_legacy_${item.id}_${index}`), contentHtml: String(song.contentHtml || ''), overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : []
+        songs: Array.isArray(item.songs) ? item.songs.filter((song) => song && typeof song.id === 'string').map((song, index) => ({ ...song, entryId: String(song.entryId || `entry_legacy_${item.id}_${index}`), contentHtml: String(song.contentHtml || ''), note: normalizeScheduleNote(song.note), overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : []
       })) : [];
       activeScheduleId = localStorage.getItem(ACTIVE_SCHEDULE_KEY) || '';
       schedulesDisabled = localStorage.getItem(SCHEDULES_DISABLED_KEY) === '1';
@@ -1020,6 +1074,7 @@
       const sharedSongs = (schedule.songs || []).map((entry) => ({
         ...entry,
         ...(String(entry.id || '').startsWith('local_') ? { localSourceName: sharedByName } : {}),
+        note: normalizeScheduleNote(entry.note),
         images: imagesForScheduleShare(entry.images || {})
       }));
       const result = await postScheduleApi('shareSchedule', { sharedByName, durationMinutes, schedule: { ...schedule, sharedByName, songs: sharedSongs, intro: intro || null } });
@@ -1080,7 +1135,7 @@
       const rawSharerName = String(received.sharedByName || '').trim() || 'Pengguna';
       const sharerName = `${rawSharerName.charAt(0).toLocaleUpperCase('id')}${rawSharerName.slice(1)}`;
       const sourceTitle = String(received.title || 'Jadwal ibadah').replace(/\s*\(salinan(?:\s+dari[^)]*)?\)\s*$/i, '').trim() || 'Jadwal ibadah';
-      const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, compactView: true, sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
+      const imported = { ...received, id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: `${sourceTitle} (salinan dari ${sharerName})`, compactView: true, keyWatermarkEnabled: received.keyWatermarkEnabled === undefined ? true : Boolean(received.keyWatermarkEnabled), keyWatermarkSettings: normalizeKeyWatermarkSettings(received.keyWatermarkSettings), sharedIntro: received.intro && typeof received.intro === 'object' ? received.intro : null, songs: Array.isArray(received.songs) ? received.songs.map((song, index) => ({ ...song, entryId: `entry_${Date.now()}_${index}`, note: normalizeScheduleNote(song.note), overrides: song.overrides && typeof song.overrides === 'object' ? song.overrides : {} })) : [] };
       schedules.unshift(imported);
       schedulesDisabled = false;
       activeScheduleId = imported.id;
@@ -1155,6 +1210,8 @@
     compactButton.setAttribute('aria-pressed', String(Boolean(schedule.compactView)));
     compactButton.setAttribute('aria-label', schedule.compactView ? 'Tampilan lengkap' : 'Tampilan ringkas');
     compactButton.title = schedule.compactView ? 'Tampilan lengkap' : 'Tampilan ringkas';
+    const keyWatermarkEnabled = Boolean(schedule.keyWatermarkEnabled);
+    scheduleKeyWatermarkEnabledInput.checked = keyWatermarkEnabled;
     document.getElementById('schedule-view-dialog').classList.toggle('is-compact', Boolean(schedule.compactView));
     const startButton = document.getElementById('start-worship');
     startButton.disabled = schedule.songs.length === 0;
@@ -1168,15 +1225,17 @@
       return `<li class="schedule-song-row${sourceClass}${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
         <button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button>
         <span class="schedule-song-order">${index + 1}</span>
-        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}</span><span class="schedule-song-compact-name"><span class="schedule-song-compact-text">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.tempo ? ` ${escapeText(song.tempo)}` : ''}${song.genre ? ` · ${escapeText(song.genre)}` : ''}</span>${entry.preWorship ? '<span class="schedule-song-pre-label">(Pra)</span>' : ''}</span>${localAttribution}</button>
+        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}</span><span class="schedule-song-compact-name"><span class="schedule-song-compact-copy"><span class="schedule-song-compact-text">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.genre ? ` - ${escapeText(song.genre)}` : ''}</span>${normalizeScheduleNote(entry.note) ? `<span class="schedule-song-compact-note"><em> - ${escapeText(normalizeScheduleNote(entry.note))}</em></span>` : ''}</span>${entry.preWorship ? '<span class="schedule-song-pre-label">(Pra)</span>' : ''}</span>${localAttribution}</button>
         <span class="schedule-song-actions">
           <label class="pre-worship-toggle"><input type="checkbox" data-action="toggle-pre-worship" data-entry-id="${escapeText(entry.entryId)}" ${entry.preWorship ? 'checked' : ''}><span>Pra-ibadah</span></label>
           <button type="button" data-action="copy-to-my-songs" data-entry-id="${escapeText(entry.entryId)}" aria-label="Add to Laguku: ${escapeText(song.title || entry.title || '')}" title="Add to Laguku">Laguku</button>
           <button type="button" data-action="move-up" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke atas" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
           <button type="button" data-action="move-down" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke bawah" ${index === schedule.songs.length - 1 ? 'disabled' : ''}>&#8595;</button>
           <button type="button" data-action="edit-song" data-entry-id="${escapeText(entry.entryId)}" aria-label="Edit lagu di jadwal">&#9998;</button>
-          <button type="button" class="remove-scheduled-song" data-action="remove-song" data-entry-id="${escapeText(entry.entryId)}" aria-label="Hapus lagu dari jadwal">&#215;</button>
+          <button type="button" class="remove-scheduled-song" data-action="remove-song" data-entry-id="${escapeText(entry.entryId)}" aria-label="Hapus lagu dari jadwal" title="Hapus lagu"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button>
         </span>
+        <button type="button" class="schedule-note-button${entry.note ? ' has-note' : ''}" data-action="edit-note" data-entry-id="${escapeText(entry.entryId)}" aria-label="${entry.note ? 'Edit catatan lagu' : 'Tambah catatan lagu'}" title="${entry.note ? 'Edit catatan' : 'Tambah catatan'}" aria-expanded="false">Catatan</button>
+        <div class="schedule-note-editor" data-note-editor="${escapeText(entry.entryId)}" hidden><label for="schedule-note-${escapeText(entry.entryId)}">Catatan lagu <span class="schedule-note-count">${normalizeScheduleNote(entry.note).trim() ? normalizeScheduleNote(entry.note).trim().split(/\s+/).length : 0}/20 kata</span></label><textarea id="schedule-note-${escapeText(entry.entryId)}" data-note-entry-id="${escapeText(entry.entryId)}" maxlength="300" rows="2" placeholder="Contoh: Intro Biola">${escapeText(entry.note || '')}</textarea><div class="schedule-note-actions"><button type="button" data-action="cancel-note" data-entry-id="${escapeText(entry.entryId)}">Batal</button><button type="button" class="schedule-note-save" data-action="save-note" data-entry-id="${escapeText(entry.entryId)}">Simpan catatan</button></div></div>
       </li>`;
     }).join('');
     list.innerHTML = `<article class="schedule-card" data-schedule-id="${escapeText(schedule.id)}">${schedule.songs.length
@@ -1198,7 +1257,8 @@
       }
       const entryId = entry.entryId;
       const preWorship = Boolean(entry.preWorship);
-      Object.assign(entry, createScheduledEntry(latestSong), { entryId, preWorship, overrides: {} });
+      const note = normalizeScheduleNote(entry.note);
+      Object.assign(entry, createScheduledEntry(latestSong), { entryId, preWorship, note, overrides: {} });
       updatedCount += 1;
     }
     if (!updatedCount) {
@@ -1293,7 +1353,10 @@
       currentPreviewSongs = scheduleContext.songs.map((item) => ({
         ...getEffectiveScheduledSong(item),
         preWorship: Boolean(item.preWorship),
-        scheduleIntro: intro
+        scheduleNote: normalizeScheduleNote(item.note),
+        scheduleIntro: intro,
+        scheduleKeyWatermark: Boolean(scheduleContext.keyWatermarkEnabled),
+        scheduleKeyWatermarkSettings: preferredKeyWatermarkSettings || normalizeKeyWatermarkSettings(scheduleContext.keyWatermarkSettings)
       }));
       const activeIndex = activeEntryId
         ? currentPreviewSongs.findIndex((song) => song.entryId === activeEntryId && findDefaultScoreInstrument(song))
@@ -1545,7 +1608,7 @@
 
   function addSchedule() {
     const date = todayString();
-    const schedule = { id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: 'Ibadah Baru', date, compactView: true, songs: [] };
+    const schedule = { id: `schedule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, title: 'Ibadah Baru', date, compactView: true, keyWatermarkEnabled: true, keyWatermarkSettings: defaultKeyWatermarkSettings(), songs: [] };
     schedules.unshift(schedule);
     schedulesDisabled = false;
     activeScheduleId = schedule.id;
@@ -1635,6 +1698,11 @@
     }
   }
 
+  function normalizeScheduleNote(value) {
+    const words = String(value || '').trim().split(/\s+/).filter(Boolean);
+    return words.slice(0, 20).join(' ');
+  }
+
   function createScheduledEntry(song, images = song.images || {}) {
     return {
       entryId: `entry_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -1650,6 +1718,7 @@
       referenceUrl: song.referenceUrl || '',
       contentHtml: normalizeSongContentHtml(song.contentHtml),
       images: images && typeof images === 'object' ? images : {},
+      note: '',
       overrides: {}
     };
   }
@@ -1718,6 +1787,39 @@
     }
     const action = button ? button.dataset.action : '';
 
+    if (action === 'edit-note') {
+      const row = button.closest('.schedule-song-row');
+      const editor = row?.querySelector('.schedule-note-editor');
+      if (!row || !editor) return;
+      const opening = editor.hidden;
+      editor.hidden = !opening;
+      button.setAttribute('aria-expanded', String(opening));
+      if (opening) row.querySelector('textarea[data-note-entry-id]')?.focus();
+      return;
+    }
+
+    if (action === 'cancel-note') {
+      const row = button.closest('.schedule-song-row');
+      const entry = schedule.songs.find((item) => item.entryId === button.dataset.entryId);
+      const editor = row?.querySelector('.schedule-note-editor');
+      const toggle = row?.querySelector('[data-action="edit-note"]');
+      const textarea = row?.querySelector('textarea[data-note-entry-id]');
+      if (textarea) textarea.value = entry?.note || '';
+      if (editor) editor.hidden = true;
+      toggle?.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    if (action === 'save-note') {
+      const row = button.closest('.schedule-song-row');
+      const entry = schedule.songs.find((item) => item.entryId === button.dataset.entryId);
+      if (!entry || !row) return;
+      entry.note = normalizeScheduleNote(row.querySelector('textarea[data-note-entry-id]')?.value);
+      saveSchedules();
+      renderScheduleView(schedule.id);
+      return;
+    }
+
     if (action === 'copy-to-my-songs') {
       const entry = schedule.songs.find((item) => item.entryId === button.dataset.entryId);
       if (!entry) return;
@@ -1766,7 +1868,7 @@
   }
 
   function handleScheduleRowClick(event) {
-    if (event.target.closest('button, input, label')) return;
+    if (event.target.closest('button, input, label, .schedule-note-editor')) return;
     const row = event.target.closest('.schedule-song-row');
     const card = row && row.closest('.schedule-card');
     if (!row || !card) return;
@@ -1776,8 +1878,26 @@
   }
 
   async function openScheduledSong(schedule, entry, startImmediately = false) {
+    activeWorshipKeyWatermarkEnabled = Boolean(schedule.keyWatermarkEnabled);
+    activeWorshipKeyWatermarkSettings = preferredKeyWatermarkSettings || normalizeKeyWatermarkSettings(schedule.keyWatermarkSettings);
     let intro = schedule.sharedIntro || (Object.prototype.hasOwnProperty.call(scheduleIntros, schedule.id) ? scheduleIntros[schedule.id] : undefined);
-    if (intro === undefined) {
+    if (intro === undefined && startImmediately) {
+      intro = null;
+      callScheduleApi('getScheduleIntro', { scheduleId: schedule.id, uploaderId: preferredUserId }).then((result) => {
+        const latestIntro = result.intro || null;
+        scheduleIntros[schedule.id] = latestIntro;
+        persistScheduleIntroCache();
+        if (!scoreImageDialog.open || scoreImageReturnTarget !== 'schedule' || currentPreviewSong?.entryId !== entry.entryId) return;
+        currentPreviewSongs.forEach((song) => { song.scheduleIntro = latestIntro; });
+        activeScheduleIntro = latestIntro;
+        scoreIntroBackButton.hidden = !latestIntro;
+        if (latestIntro) {
+          scoreIntroBackButton.textContent = 'Intro';
+          scoreIntroBackButton.title = 'Kembali ke Intro';
+          scoreIntroBackButton.setAttribute('aria-label', 'Kembali ke Intro');
+        }
+      }).catch((error) => console.warn('Intro jadwal tidak dapat dimuat:', error));
+    } else if (intro === undefined) {
       try {
         const result = await callScheduleApi('getScheduleIntro', { scheduleId: schedule.id, uploaderId: preferredUserId });
         intro = result.intro || null;
@@ -1785,7 +1905,7 @@
         persistScheduleIntroCache();
       } catch (error) { console.warn('Intro jadwal tidak dapat dimuat:', error); }
     }
-    const queue = schedule.songs.map((item) => ({ ...getEffectiveScheduledSong(item), preWorship: Boolean(item.preWorship), scheduleIntro: intro }));
+    const queue = schedule.songs.map((item) => ({ ...getEffectiveScheduledSong(item), preWorship: Boolean(item.preWorship), scheduleNote: normalizeScheduleNote(item.note), scheduleIntro: intro, scheduleKeyWatermark: Boolean(schedule.keyWatermarkEnabled), scheduleKeyWatermarkSettings: preferredKeyWatermarkSettings || normalizeKeyWatermarkSettings(schedule.keyWatermarkSettings) }));
     const index = schedule.songs.findIndex((item) => item.entryId === entry.entryId);
     if (index >= 0) {
       if (startImmediately) {
@@ -1814,7 +1934,12 @@
       document.getElementById('refresh-schedule-songs-status').textContent = 'Tambahkan lagu ke jadwal sebelum memulai ibadah.';
       return;
     }
-    await openScheduledSong(schedule, entry, true);
+    try {
+      await openScheduledSong(schedule, entry, true);
+    } catch (error) {
+      console.error('Ibadah tidak dapat dimulai:', error);
+      document.getElementById('refresh-schedule-songs-status').textContent = 'Tampilan ibadah gagal dibuka. Coba lagi.';
+    }
   }
 
   function openScheduleSongEditor(scheduleId, entryId) {
@@ -1963,6 +2088,17 @@
   function handleSearchInput() {
     renderList();
   }
+  function handleScheduleNoteInput(event) {
+    const textarea = event.target.closest('textarea[data-note-entry-id]');
+    if (!textarea) return;
+    const words = textarea.value.trim().split(/\s+/).filter(Boolean);
+    if (words.length > 20) {
+      textarea.value = words.slice(0, 20).join(' ');
+    }
+    const count = textarea.closest('.schedule-note-editor')?.querySelector('.schedule-note-count');
+    if (count) count.textContent = `${textarea.value.trim() ? textarea.value.trim().split(/\s+/).filter(Boolean).length : 0}/20 kata`;
+  }
+
   function handleScheduleInput(event) {
     const input = event.target.closest('input[data-field]');
     const card = event.target.closest('.schedule-card');
@@ -2158,7 +2294,7 @@
     renderMySongs();
   });
   mySongsSortSelect.addEventListener('change', () => {
-    mySongsSort = mySongsSortSelect.value || 'number-asc';
+    mySongsSort = mySongsSortSelect.value || 'title-asc';
     renderMySongs();
   });
   collectionCategoryFilter.addEventListener('change', () => {
@@ -2167,7 +2303,7 @@
     renderList();
   });
   collectionSortSelect.addEventListener('change', () => {
-    collectionSort = collectionSortSelect.value || 'number-asc';
+    collectionSort = collectionSortSelect.value || 'title-asc';
     renderList();
   });
   [collectionActiveSchedule, mySongsActiveSchedule].filter(Boolean).forEach((container) => {
@@ -2907,8 +3043,119 @@
   const appSidebar = document.getElementById('app-sidebar');
   const sidebarToggle = document.getElementById('sidebar-menu-toggle');
   const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+  const sidebarNav = document.querySelector('.sidebar-nav');
+  const sidebarOrderItems = document.getElementById('sidebar-settings-list');
+  const sidebarSettingsDialog = document.getElementById('sidebar-settings-dialog');
+  const sidebarSettingsForm = document.getElementById('sidebar-settings-form');
+  const defaultSidebarOrder = ['collection', 'schedule', 'my-songs', 'settings'];
+  function normalizeSidebarOrder(order) {
+    const validViews = new Set(defaultSidebarOrder);
+    const normalized = Array.isArray(order) ? order.filter((view, index) => validViews.has(view) && order.indexOf(view) === index) : [];
+    return [...normalized, ...defaultSidebarOrder.filter((view) => !normalized.includes(view))];
+  }
+  function applySidebarOrder(order) {
+    const normalized = normalizeSidebarOrder(order);
+    normalized.forEach((view) => {
+      const button = sidebarNav.querySelector(`[data-app-view="${view}"]`);
+      if (button) sidebarNav.append(button);
+    });
+    return normalized;
+  }
+  function currentSidebarOrder() {
+    return [...sidebarNav.querySelectorAll('.sidebar-nav-item')].map((button) => button.dataset.appView);
+  }
+  try {
+    const storedSidebarOrder = JSON.parse(localStorage.getItem(SIDEBAR_ORDER_KEY) || 'null');
+    if (Array.isArray(storedSidebarOrder)) applySidebarOrder(storedSidebarOrder);
+  } catch (error) { /* Keep the default menu order if local settings are unavailable. */ }
   const appViewButtons = [...document.querySelectorAll('.sidebar-nav-item')];
   const appViewPanels = [...document.querySelectorAll('.app-view')];
+  let draggedSidebarItem = null;
+  let sidebarDragPlaceholder = null;
+  let sidebarDragGhost = null;
+  let sidebarPointerDragId = null;
+  let sidebarDragPointerOffset = { x: 0, y: 0 };
+  function moveSidebarSettingsPlaceholder(clientY) {
+    if (!sidebarDragPlaceholder) return;
+    const siblings = [...sidebarOrderItems.children].filter((item) => item !== sidebarDragPlaceholder);
+    const nextItem = siblings.find((item) => clientY < item.getBoundingClientRect().top + item.offsetHeight / 2);
+    sidebarOrderItems.insertBefore(sidebarDragPlaceholder, nextItem || null);
+  }
+  function finishSidebarSettingsDrag() {
+    if (!draggedSidebarItem) return;
+    if (sidebarDragPlaceholder?.isConnected) sidebarDragPlaceholder.replaceWith(draggedSidebarItem);
+    sidebarDragGhost?.remove();
+    sidebarDragPlaceholder?.remove();
+    draggedSidebarItem = null;
+    sidebarDragPlaceholder = null;
+    sidebarDragGhost = null;
+    sidebarPointerDragId = null;
+    sidebarDragPointerOffset = { x: 0, y: 0 };
+  }
+  function startSidebarSettingsDrag(item, event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.preventDefault();
+    const rect = item.getBoundingClientRect();
+    draggedSidebarItem = item;
+    sidebarDragPlaceholder = document.createElement('li');
+    sidebarDragPlaceholder.className = 'sidebar-settings-placeholder';
+    sidebarDragPlaceholder.setAttribute('aria-hidden', 'true');
+    sidebarDragPlaceholder.style.height = `${rect.height}px`;
+    sidebarDragPlaceholder.style.width = `${rect.width}px`;
+    item.replaceWith(sidebarDragPlaceholder);
+    sidebarDragGhost = item.cloneNode(true);
+    sidebarDragGhost.classList.add('sidebar-settings-floating');
+    sidebarDragGhost.setAttribute('aria-hidden', 'true');
+    sidebarDragGhost.style.width = `${rect.width}px`;
+    sidebarDragGhost.style.height = `${rect.height}px`;
+    sidebarDragGhost.style.left = `${rect.left}px`;
+    sidebarDragGhost.style.top = `${rect.top}px`;
+    sidebarSettingsDialog.append(sidebarDragGhost);
+    sidebarDragPointerOffset = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    sidebarPointerDragId = event.pointerId;
+    sidebarOrderItems.setPointerCapture(event.pointerId);
+  }
+  function renderSidebarSettingsOrder(order = currentSidebarOrder()) {
+    const itemsByView = new Map([...sidebarOrderItems.children].map((item) => [item.dataset.sidebarOrder, item]));
+    normalizeSidebarOrder(order).forEach((view) => {
+      const item = itemsByView.get(view);
+      if (item) sidebarOrderItems.append(item);
+    });
+  }
+  document.getElementById('open-sidebar-settings').addEventListener('click', () => {
+    renderSidebarSettingsOrder();
+    sidebarSettingsDialog.showModal();
+  });
+  document.getElementById('close-sidebar-settings').addEventListener('click', () => sidebarSettingsDialog.close());
+  document.getElementById('cancel-sidebar-settings').addEventListener('click', () => sidebarSettingsDialog.close());
+  sidebarOrderItems.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('.sidebar-settings-grip')) return;
+    const item = event.target.closest('.sidebar-settings-item');
+    if (!item) return;
+    startSidebarSettingsDrag(item, event);
+  });
+  sidebarOrderItems.addEventListener('pointermove', (event) => {
+    if (sidebarPointerDragId !== event.pointerId || !draggedSidebarItem) return;
+    event.preventDefault();
+    sidebarDragGhost.style.left = `${event.clientX - sidebarDragPointerOffset.x}px`;
+    sidebarDragGhost.style.top = `${event.clientY - sidebarDragPointerOffset.y}px`;
+    moveSidebarSettingsPlaceholder(event.clientY);
+  });
+  sidebarOrderItems.addEventListener('pointerup', (event) => {
+    if (sidebarPointerDragId === event.pointerId) finishSidebarSettingsDrag();
+  });
+  sidebarOrderItems.addEventListener('pointercancel', (event) => {
+    if (sidebarPointerDragId === event.pointerId) finishSidebarSettingsDrag();
+  });
+  sidebarSettingsDialog.addEventListener('close', finishSidebarSettingsDrag);
+  sidebarSettingsForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const order = [...sidebarOrderItems.children].map((item) => item.dataset.sidebarOrder);
+    const normalized = applySidebarOrder(order);
+    try { localStorage.setItem(SIDEBAR_ORDER_KEY, JSON.stringify(normalized)); } catch (error) { /* The applied order remains active for this session. */ }
+    sidebarSettingsDialog.close();
+  });
+  let hasOpenedCollectionView = false;
   function closeSidebar() {
     appSidebar.classList.remove('is-open');
     sidebarToggle.setAttribute('aria-expanded', 'false');
@@ -2944,6 +3191,10 @@
     if (view === 'my-songs') activateLibraryTab(document.getElementById('my-songs-tab'));
     if (view === 'collection') activateLibraryTab(document.getElementById('all-songs-tab'));
     if (view === 'settings') activateLibraryTab(instrumentProfileButton);
+    if (view === 'collection' && !hasOpenedCollectionView) {
+      hasOpenedCollectionView = true;
+      if (!songs.length) loadSongs(true, false);
+    }
     closeSidebar();
   }
   sidebarToggle.addEventListener('click', () => {
@@ -3395,6 +3646,7 @@
     else {
       setScoreImageControlsHidden(false);
       scoreImageDialog.classList.toggle('instrument-controls-hidden', !hasOtherInstruments);
+      updateScoreKeyWatermark();
       scheduleScoreControlsHide();
     }
   }
@@ -3453,6 +3705,120 @@
     scoreImageReferenceButton.title = count ? `${count} referensi untuk ${currentPreviewSong?.title || 'lagu ini'}` : '';
   }
 
+  function formatKeyWatermark(key) {
+    const value = String(key || '').trim();
+    if (!value) return '';
+    return /=\s*1\s*$/i.test(value) ? value : `${value}=1`;
+  }
+
+  function updateScoreKeyWatermark() {
+    if (!scoreKeyWatermark || !scoreKeyWatermarkValue) return;
+    const watermark = formatKeyWatermark(currentPreviewSong?.key);
+    const settings = normalizeKeyWatermarkSettings(activeWorshipKeyWatermarkSettings || currentPreviewSong?.scheduleKeyWatermarkSettings);
+    const genre = String(currentPreviewSong?.genre || '').trim();
+    const note = normalizeScheduleNote(currentPreviewSong?.scheduleNote || currentPreviewSong?.note);
+    const enabled = scoreImageMode === 'score'
+      && Boolean(currentPreviewSong?.scheduleKeyWatermark || activeWorshipKeyWatermarkEnabled)
+      && Boolean((settings.showKey && watermark) || (settings.showGenre && currentPreviewSong?.genre) || (settings.showNote && (currentPreviewSong?.scheduleNote || currentPreviewSong?.note)));
+    const controlsHidden = scoreImageDialog.classList.contains('controls-hidden');
+    scoreKeyWatermark.hidden = !enabled || controlsHidden;
+    const renderSignature = JSON.stringify([
+      scoreImageMode, enabled, watermark, genre, note,
+      settings.showKey, settings.showGenre, settings.showNote,
+      settings.fontSize, settings.genreFontSize, settings.noteFontSize, settings.transparency,
+      settings.color, settings.genreColor, settings.noteColor,
+      settings.outlineWidth, settings.outlinePosition, settings.outlineColor,
+      settings.shadowX, settings.shadowY, settings.shadowBlur, settings.shadowColor
+    ]);
+    if (scoreKeyWatermark.dataset.renderSignature === renderSignature) return;
+    scoreKeyWatermark.dataset.renderSignature = renderSignature;
+    scoreKeyWatermarkValue.style.setProperty('font-size', `clamp(42px, ${settings.fontSize}vw, 34vw)`, 'important');
+    scoreKeyWatermarkValue.style.setProperty('font-weight', '900', 'important');
+    const textOpacity = Math.max(0, Math.min(1, (100 - settings.transparency) / 100));
+    scoreKeyWatermarkValue.style.setProperty('color', settings.color, 'important');
+    scoreKeyWatermarkValue.style.setProperty('opacity', String(textOpacity), 'important');
+    scoreKeyWatermarkValue.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
+    scoreKeyWatermarkValue.style.setProperty('-webkit-text-stroke', `${settings.outlineWidth}px ${settings.outlineColor}`, 'important');
+    scoreKeyWatermarkValue.style.setProperty('paint-order', settings.outlinePosition === 'outer' ? 'stroke fill' : 'fill stroke', 'important');
+    scoreKeyWatermarkValue.style.setProperty('text-shadow', `${settings.shadowX}px ${settings.shadowY}px ${settings.shadowBlur}px ${settings.shadowColor}`, 'important');
+    const ensureWatermarkLine = (className) => {
+      let line = scoreKeyWatermarkValue.querySelector(`.${className}`);
+      if (!line) {
+        line = document.createElement('span');
+        line.className = className;
+        scoreKeyWatermarkValue.append(line);
+      }
+      return line;
+    };
+    const keyLine = ensureWatermarkLine('score-key-watermark-key');
+    const genreLine = ensureWatermarkLine('score-key-watermark-genre');
+    const noteLine = ensureWatermarkLine('score-key-watermark-note');
+    keyLine.textContent = watermark;
+    keyLine.style.color = settings.color;
+    keyLine.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
+    keyLine.hidden = !settings.showKey || !watermark;
+    genreLine.textContent = genre ? `(${genre})` : '';
+    genreLine.style.color = settings.genreColor;
+    genreLine.style.setProperty('-webkit-text-fill-color', settings.genreColor, 'important');
+    noteLine.textContent = note ? `-> ${note}` : '';
+    noteLine.style.color = settings.noteColor;
+    noteLine.style.setProperty('-webkit-text-fill-color', settings.noteColor, 'important');
+    genreLine.style.fontSize = `clamp(18px, ${settings.genreFontSize}vw, 20vw)`;
+    noteLine.style.fontSize = `clamp(16px, ${settings.noteFontSize}vw, 18vw)`;
+    genreLine.hidden = !settings.showGenre || !genre;
+    noteLine.hidden = !settings.showNote || !note;
+  }
+
+  const keyWatermarkControlIds = ['font-size', 'genre-font-size', 'note-font-size', 'transparency', 'color', 'genre-color', 'note-color', 'outline-width', 'outline-color', 'shadow-width', 'shadow-color', 'shadow-x', 'shadow-y', 'shadow-blur'];
+  function keyWatermarkSettingsFromForm() {
+    const settings = {};
+    keyWatermarkControlIds.forEach((name) => { settings[name.replace(/-/g, '')] = Number(document.getElementById(`key-watermark-${name}`).value); });
+    return normalizeKeyWatermarkSettings({
+      showKey: document.getElementById('key-watermark-show-key').checked, showGenre: document.getElementById('key-watermark-show-genre').checked, showNote: document.getElementById('key-watermark-show-note').checked, outlinePosition: document.getElementById('key-watermark-outline-position').value, fontSize: settings.fontsize, genreFontSize: settings.genrefontsize, noteFontSize: settings.notefontsize, transparency: settings.transparency, color: document.getElementById('key-watermark-color').value, genreColor: document.getElementById('key-watermark-genre-color').value, noteColor: document.getElementById('key-watermark-note-color').value, outlineWidth: settings.outlinewidth, outlineColor: document.getElementById('key-watermark-outline-color').value,
+      shadowWidth: settings.shadowwidth, shadowColor: document.getElementById('key-watermark-shadow-color').value, shadowX: settings.shadowx, shadowY: settings.shadowy, shadowBlur: settings.shadowblur
+    });
+  }
+
+  function updateKeyWatermarkPreview() {
+    const settings = keyWatermarkSettingsFromForm();
+    const preview = keyWatermarkPreview;
+    preview.style.setProperty('font-size', `${Math.max(30, Math.min(110, settings.fontSize * 4.5))}px`, 'important');
+    preview.querySelector('.key-watermark-preview-key').hidden = !settings.showKey;
+    preview.querySelector('.key-watermark-preview-genre').hidden = !settings.showGenre;
+    preview.querySelector('.key-watermark-preview-note').hidden = !settings.showNote;
+    preview.querySelector('.key-watermark-preview-genre').style.fontSize = `${Math.max(12, Math.min(36, settings.genreFontSize * 4.5))}px`;
+    preview.querySelector('.key-watermark-preview-note').style.fontSize = `${Math.max(12, Math.min(36, settings.noteFontSize * 4.5))}px`;
+    preview.querySelector('.key-watermark-preview-key').style.color = settings.color;
+    preview.querySelector('.key-watermark-preview-genre').style.color = settings.genreColor;
+    preview.querySelector('.key-watermark-preview-note').style.color = settings.noteColor;
+    preview.querySelector('.key-watermark-preview-key').style.setProperty('-webkit-text-fill-color', settings.color, 'important');
+    preview.querySelector('.key-watermark-preview-genre').style.setProperty('-webkit-text-fill-color', settings.genreColor, 'important');
+    preview.querySelector('.key-watermark-preview-note').style.setProperty('-webkit-text-fill-color', settings.noteColor, 'important');
+    preview.style.setProperty('color', settings.color, 'important');
+    preview.style.setProperty('opacity', String(Math.max(0, Math.min(1, (100 - settings.transparency) / 100))), 'important');
+    preview.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
+    preview.style.setProperty('-webkit-text-stroke', `${settings.outlineWidth}px ${settings.outlineColor}`, 'important');
+    preview.style.setProperty('paint-order', settings.outlinePosition === 'outer' ? 'stroke fill' : 'fill stroke', 'important');
+    preview.style.setProperty('text-shadow', `${settings.shadowX}px ${settings.shadowY}px ${settings.shadowBlur}px ${settings.shadowColor}`, 'important');
+    const labels = {
+      fontSize: `${settings.fontSize}%`, genreFontSize: `${settings.genreFontSize}%`, noteFontSize: `${settings.noteFontSize}%`, transparency: `${settings.transparency}%`, color: settings.color.toUpperCase(), genreColor: settings.genreColor.toUpperCase(), noteColor: settings.noteColor.toUpperCase(), outlineWidth: `${settings.outlineWidth} px`, outlineColor: settings.outlineColor.toUpperCase(),
+      shadowWidth: `${settings.shadowWidth} px`, shadowColor: settings.shadowColor.toUpperCase(), shadowX: `${settings.shadowX} px`, shadowY: `${settings.shadowY} px`, shadowBlur: `${settings.shadowBlur} px`
+    };
+    Object.entries(labels).forEach(([name, value]) => { document.getElementById(`key-watermark-${name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}-value`).textContent = value; });
+  }
+
+  function openKeyWatermarkSettings() {
+    const settings = preferredKeyWatermarkSettings || defaultKeyWatermarkSettings();
+    document.getElementById('key-watermark-show-key').checked = settings.showKey;
+    document.getElementById('key-watermark-show-genre').checked = settings.showGenre;
+    document.getElementById('key-watermark-show-note').checked = settings.showNote;
+    document.getElementById('key-watermark-outline-position').value = settings.outlinePosition;
+    const values = { 'font-size': settings.fontSize, 'genre-font-size': settings.genreFontSize, 'note-font-size': settings.noteFontSize, transparency: settings.transparency, color: settings.color, 'genre-color': settings.genreColor, 'note-color': settings.noteColor, 'outline-width': settings.outlineWidth, 'outline-color': settings.outlineColor, 'shadow-width': settings.shadowWidth, 'shadow-color': settings.shadowColor, 'shadow-x': settings.shadowX, 'shadow-y': settings.shadowY, 'shadow-blur': settings.shadowBlur };
+    Object.entries(values).forEach(([name, value]) => { document.getElementById(`key-watermark-${name}`).value = String(value); });
+    updateKeyWatermarkPreview();
+    if (!keyWatermarkDialog.open) keyWatermarkDialog.showModal();
+  }
+
   function clampScoreImagePan(x, y, zoom = scoreImageZoom) {
     const viewportWidth = scoreImageDialog.clientWidth || window.innerWidth;
     const viewportHeight = scoreImageDialog.clientHeight || window.innerHeight;
@@ -3488,6 +3854,7 @@
 
   function setScoreImageControlsHidden(hidden) {
     scoreImageDialog.classList.toggle('controls-hidden', Boolean(hidden));
+    updateScoreKeyWatermark();
     window.clearTimeout(scoreControlsHideTimer);
     scoreControlsHideTimer = 0;
   }
@@ -3504,6 +3871,7 @@
     scoreControlsHideTimer = window.setTimeout(() => {
       scoreImageDialog.classList.add('controls-hidden');
       scoreImageDialog.classList.add('instrument-controls-hidden');
+      updateScoreKeyWatermark();
       scoreControlsHideTimer = 0;
     }, 2800);
   }
@@ -3517,6 +3885,7 @@
     fullScoreImage.dataset.attempt = '0';
     fullScoreImage.src = urls[0];
     const showingIntro = scoreImageMode === 'intro';
+    updateScoreKeyWatermark();
     renderScoreImageReferenceButton();
     fullScoreImage.alt = showingIntro ? `Intro: ${activeScheduleIntro?.name || 'Intro'}` : `Partitur ${activeScoreInstrument}, halaman ${activeScoreIndex + 1}`;
     scoreImagePosition.textContent = `${activeScoreIndex + 1} / ${activeScoreFiles.length}`;
@@ -4644,7 +5013,12 @@
     scoreImageDialog.classList.remove('instrument-controls-hidden');
     scoreImageInstruments.hidden = true;
     scoreImageReferenceButton.hidden = true;
+    scoreKeyWatermark.hidden = true;
+    scoreKeyWatermarkValue.textContent = '';
+    delete scoreKeyWatermark.dataset.renderSignature;
     scoreImageMode = 'score';
+    activeWorshipKeyWatermarkEnabled = false;
+    activeWorshipKeyWatermarkSettings = null;
     scoreViewerFromList = false;
     activeScheduleIntro = null;
     scoreImageReturnTarget = 'lyrics';
@@ -4879,6 +5253,7 @@
   scheduleList.addEventListener('click', handleScheduleClick);
   scheduleList.addEventListener('input', handleScheduleInput);
   scheduleViewDialog.addEventListener('click', handleScheduleClick);
+  scheduleViewDialog.addEventListener('input', handleScheduleNoteInput);
   scheduleViewList.addEventListener('click', handleScheduleRowClick);
   document.getElementById('close-schedule-view').addEventListener('click', () => scheduleViewDialog.close());
   document.getElementById('refresh-schedule-songs').addEventListener('click', refreshViewedScheduleSongsFromLibrary);
@@ -4889,6 +5264,33 @@
     schedule.compactView = !schedule.compactView;
     saveSchedules();
     renderScheduleView(schedule.id);
+  });
+  keyWatermarkSettingsButton.addEventListener('click', openKeyWatermarkSettings);
+  scheduleKeyWatermarkEnabledInput.addEventListener('change', () => {
+    const schedule = schedules.find((item) => item.id === viewedScheduleId);
+    if (!schedule) return;
+    schedule.keyWatermarkEnabled = scheduleKeyWatermarkEnabledInput.checked;
+    saveSchedules();
+    activeWorshipKeyWatermarkEnabled = Boolean(schedule.keyWatermarkEnabled);
+  });
+  keyWatermarkControlIds.forEach((name) => document.getElementById(`key-watermark-${name}`).addEventListener('input', updateKeyWatermarkPreview));
+  ['key-watermark-show-key', 'key-watermark-show-genre', 'key-watermark-show-note'].forEach((id) => document.getElementById(id).addEventListener('change', updateKeyWatermarkPreview));
+  document.getElementById('key-watermark-outline-position').addEventListener('change', updateKeyWatermarkPreview);
+  document.getElementById('close-key-watermark').addEventListener('click', () => keyWatermarkDialog.close());
+  keyWatermarkForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const settings = saveKeyWatermarkSettings(keyWatermarkSettingsFromForm());
+    activeWorshipKeyWatermarkSettings = settings;
+    if (viewedScheduleId) {
+      const schedule = schedules.find((item) => item.id === viewedScheduleId);
+      if (schedule) {
+        schedule.keyWatermarkSettings = settings;
+        saveSchedules();
+        renderScheduleView(schedule.id);
+      }
+    }
+    updateScoreKeyWatermark();
+    keyWatermarkDialog.close();
   });
   scheduleViewDialog.addEventListener('close', () => document.body.classList.remove('schedule-view-open'));
   document.getElementById('add-schedule-intro').addEventListener('click', openScheduleIntroForm);
@@ -5060,6 +5462,8 @@
     setStatus('Belum ada data lokal. Tekan "Perbarui data" untuk memuat lagu dari database.');
     setSyncStatus('Belum disinkronkan');
   }
+  if (hasCache && isSongCacheOlderThanOneDay(cachedSongsUpdatedAt)) loadSongs(true, false);
+  activateAppView(currentSidebarOrder()[0] || 'collection');
 })();
 
 
