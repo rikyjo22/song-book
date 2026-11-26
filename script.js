@@ -2,9 +2,10 @@
   'use strict';
 
   // Pemutaran file Drive memakai endpoint media yang tersedia di backend manager.
-  const API_URL = 'https://script.google.com/macros/s/AKfycbxYErAtW6biQjLZBcp08NPl3CVV67hSHkWlHiMhpsbabTUKNOdeqx1zJpJRuwULKVfRuQ/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbz3aMkgQWSpfnkuMoViwicrNYJ69OQuTbNGcWosrT7j5_shw6BvhoV6KM3RibjjRMc_YQ/exec';
   const CACHE_KEY = 'song-book:songs:v4';
   const SCHEDULE_KEY = 'song-book:worship-schedules:v1';
+  // Dedicated database for score/partitur images. Reference audio/video uses a separate DB.
   const SCHEDULE_IMAGE_DB_NAME = 'song-book:schedule-images:v1';
   const ACTIVE_SCHEDULE_KEY = 'song-book:active-worship-schedule:v1';
   const SCHEDULES_DISABLED_KEY = 'song-book:worship-schedules-disabled:v1';
@@ -19,6 +20,8 @@
   const FONT_SIZE_KEY = 'song-book:font-size:v1';
   const KEY_WATERMARK_SETTINGS_KEY = 'song-book:key-watermark-settings:v1';
   const SIDEBAR_ORDER_KEY = 'song-book:sidebar-order:v1';
+  const OFFLINE_APP_ENABLED_KEY = 'song-book:offline-app-enabled:v1';
+  const OFFLINE_DOWNLOAD_STATE_KEY = 'song-book:offline-image-download:v1';
   // Use the same picker in every browser; native date controls differ widely.
   const DATE_INPUT_TYPE = 'text';
   const CATEGORIES = [
@@ -36,8 +39,14 @@
   const instrumentFilterSelect = document.getElementById('instrument-filter-select');
   const profileUserNameInput = document.getElementById('profile-user-name');
   const instrumentFilterStatus = document.getElementById('instrument-filter-status');
+  const offlineSettingsButton = document.getElementById('open-offline-settings');
+  const offlineSettingsLabel = document.getElementById('offline-settings-label');
+  const offlineStorageUsage = document.getElementById('offline-storage-usage');
+  const offlineSettingsWarning = document.getElementById('offline-settings-warning');
+  const offlineSettingsStatus = document.getElementById('offline-settings-status');
   const search = document.getElementById('search-input');
   const clearSearchButton = document.getElementById('clear-search');
+  const searchBox = search?.closest('.search-box');
   const mySongsSearch = document.getElementById('my-songs-search');
   const mySongsCategoryFilter = document.getElementById('my-songs-category-filter');
   const mySongsSortSelect = document.getElementById('my-songs-sort-select');
@@ -109,6 +118,7 @@
   const scoreImageInstruments = document.getElementById('score-image-instruments');
   const scoreImageReferenceButton = document.getElementById('score-image-reference-button');
   const scoreImagePosition = document.getElementById('score-image-position');
+  const scoreImageSource = document.getElementById('score-image-source');
   const scoreKeyWatermark = document.getElementById('score-key-watermark');
   const scoreKeyWatermarkValue = document.getElementById('score-key-watermark-value');
   const keyWatermarkDialog = document.getElementById('key-watermark-dialog');
@@ -121,16 +131,46 @@
   const scoreNextGeneralSongLabel = document.getElementById('score-next-general-song-label');
   let songs = [];
   let mySongs = [];
+  let mySongsLoaded = false;
+  const collectionSearchTextCache = new WeakMap();
+  const mySongSearchTextCache = new WeakMap();
+  const songReferencesCache = new WeakMap();
+  let collectionSearchRenderTimer = 0;
+  let collectionRenderGeneration = 0;
+  // Reusing the filtered/sorted array avoids repeating the most expensive
+  // part of collection navigation every time the user returns to the view.
+  // The source reference changes whenever fresh data is loaded, so stale
+  // entries are discarded automatically.
+  let collectionVisibleCache = null;
+  let collectionSortedCache = null;
+  let collectionRenderTimer = 0;
+  let collectionRenderActive = false;
+  let collectionFilterTimer = 0;
+  let collectionWorkGeneration = 0;
+  let mySongsRenderGeneration = 0;
+  // Keep hidden library panels out of the render path. A schedule refresh or
+  // an IndexedDB completion can happen while the user is changing tabs; doing
+  // both song lists synchronously there makes the next sidebar click wait.
+  let collectionRenderPending = true;
+  // Schedule activation changes only affect the small action buttons on
+  // collection cards. Keep that invalidation separate from a full list
+  // render so returning to the collection does not sort and rebuild every
+  // song card again.
+  let collectionScheduleControlsPending = false;
+  let mySongsRenderPending = true;
   let activeCategory = 'ALL';
   let collectionSort = 'title-asc';
   let mySongsSort = 'title-asc';
   let preferredInstrument = readInstrumentProfile();
   let preferredUserName = readProfileUserName();
   let preferredUserId = readProfileUserId();
+  let offlineAppEnabled = readOfflineAppEnabled();
+  let offlineStorageUsageRequestId = 0;
   let currentSongIndex = -1;
   let currentPreviewSongs = [];
   let currentPreviewSong = null;
   let currentPreviewFromCollection = false;
+  let previewRenderGeneration = 0;
   let previewZoom = 1;
   let pinchStart = null;
   let sourcePreviewKey = 'C';
@@ -142,6 +182,7 @@
   let cachedSongsUpdatedAt = null;
   let isLoadingSongs = false;
   let schedules = [];
+  let scheduleRenderPending = true;
   let schedulesDisabled = false;
   let scheduleTitleBeforeEdit = null;
   let activeScheduleId = '';
@@ -183,6 +224,12 @@
   let lastSharePullerSyncAt = 0;
   let activeScheduleShare = readActiveScheduleShare();
   const scheduleImageObjectUrls = new Map();
+  const offlineImageObjectUrls = new Map();
+  const offlineImageKeys = new Set();
+  const offlineImageSources = new Map();
+  let offlineImageCacheLoaded = false;
+  let offlineImageCacheLoadPromise = null;
+  let offlineImageDownloadInFlight = false;
   let shareExpiresAt = activeScheduleShare ? activeScheduleShare.expiresAt : 0;
 
   const instrumentProfileButton = document.getElementById('instrument-filter-open');
@@ -288,6 +335,10 @@
     return selectedCategory === 'ALL' || song.category === selectedCategory;
   }
   function getSongReferences(song) {
+    if (song && typeof song === 'object') {
+      const cached = songReferencesCache.get(song);
+      if (cached) return cached;
+    }
     let references = song && (song.references ?? song.references_json ?? song.reference_json) || [];
     if (typeof references === 'string') {
       try { references = JSON.parse(references); } catch (error) { references = []; }
@@ -298,6 +349,7 @@
     if (legacyUrl && !references.some((reference) => reference.url === legacyUrl)) {
       references.push({ name: 'YouTube', type: 'link', url: legacyUrl });
     }
+    if (song && typeof song === 'object') songReferencesCache.set(song, references);
     return references;
   }
   function displaySongBookCode(song) {
@@ -344,9 +396,346 @@
     return title;
   }
   function normalize(value) { return String(value || '').toLocaleLowerCase('id').normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function normalizeSearch(value) { return normalize(value).replace(/\s+/g, ' ').trim(); }
+  function compactBookNumberSpacing(value) {
+    return String(value || '').replace(/\b([a-z]{1,4})\s+(\d+)\b/g, '$1$2');
+  }
+  function searchTextMatches(text, query) {
+    if (!query) return true;
+    if (text.includes(query)) return true;
+    return compactBookNumberSpacing(text).includes(compactBookNumberSpacing(query));
+  }
+  function isBookNumberSearchQuery(query) {
+    const codes = CATEGORIES.filter(({ code }) => code !== 'ALL').map(({ code }) => code.toLowerCase()).join('|');
+    return new RegExp(`^(?:${codes})\\s*\\d+$`, 'i').test(String(query || '').trim());
+  }
+  function selectNumberSortForSearch(query, sortSelect) {
+    if (!isBookNumberSearchQuery(query)) return false;
+    sortSelect.value = 'number-asc';
+    return true;
+  }
+  function getCollectionSearchText(song) {
+    const cached = collectionSearchTextCache.get(song);
+    if (cached !== undefined) return cached;
+    const text = normalizeSearch([song.category, song.number, song.title, song.key, song.genre, song.songCreator, song.dateCreate, song.tempo, stripHtml(song.contentHtml)].join(' '));
+    collectionSearchTextCache.set(song, text);
+    return text;
+  }
+  function getMySongSearchText(song) {
+    const cached = mySongSearchTextCache.get(song);
+    if (cached !== undefined) return cached;
+    const text = normalizeSearch([song.number, song.title, stripHtml(song.contentHtml)].join(' '));
+    mySongSearchTextCache.set(song, text);
+    return text;
+  }
   function readInstrumentProfile() {
     try { return String(localStorage.getItem(INSTRUMENT_PROFILE_KEY) || '').trim(); }
     catch (error) { return ''; }
+  }
+  function readOfflineAppEnabled() {
+    try { return localStorage.getItem(OFFLINE_APP_ENABLED_KEY) === '1'; }
+    catch (error) { return false; }
+  }
+  function saveOfflineAppEnabled(enabled) {
+    try { localStorage.setItem(OFFLINE_APP_ENABLED_KEY, enabled ? '1' : '0'); }
+    catch (error) { /* Keep the current session state when storage is unavailable. */ }
+  }
+  function imageDataBytes(value) {
+    if (typeof Blob !== 'undefined' && value instanceof Blob) return value.size;
+    if (typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer) return value.byteLength;
+    const source = typeof value === 'string'
+      ? value
+      : value && typeof value === 'object'
+        ? String(value.url || value.dataUrl || value.data || '')
+        : '';
+    if (!/^data:image\/[^;,]+;base64,/i.test(source)) return 0;
+    const base64 = source.slice(source.indexOf(',') + 1).replace(/\s/g, '');
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor(base64.length * 3 / 4) - padding);
+  }
+  function imageCollectionBytes(images) {
+    return Object.values(images || {}).reduce((total, files) => total + (Array.isArray(files)
+      ? files.reduce((sum, file) => sum + imageDataBytes(file), 0)
+      : 0), 0);
+  }
+  function localImageBytes() {
+    const mySongBytes = mySongs.reduce((total, song) => total + imageCollectionBytes(song.images), 0);
+    const scheduleBytes = schedules.reduce((total, schedule) => total + (schedule.songs || []).reduce((sum, entry) => sum + imageCollectionBytes(entry.images), 0), 0);
+    return mySongBytes + scheduleBytes;
+  }
+  function imageFileId(file) {
+    return scoreImageId(file);
+  }
+  function allScoreImageFiles() {
+    const result = new Map();
+    const collect = (song) => {
+      Object.values(song?.images || {}).forEach((files) => (Array.isArray(files) ? files : []).forEach((file) => {
+        const id = imageFileId(file);
+        if (!id || result.has(id)) return;
+        const source = typeof file === 'string' ? file : String(file?.url || file?.driveUrl || '');
+        if (source && !/^data:image\//i.test(source)) result.set(id, { id, source, name: file?.name || id, mimeType: file?.mimeType || 'image/jpeg' });
+      }));
+    };
+    songs.forEach(collect);
+    mySongs.forEach(collect);
+    schedules.forEach((schedule) => (schedule.songs || []).forEach(collect));
+    Object.values(scheduleIntros || {}).forEach((intro) => {
+      const id = imageFileId(intro);
+      const source = String(intro?.url || intro?.driveUrl || '');
+      if (id && source && !result.has(id)) result.set(id, { id, source, name: intro?.name || id, mimeType: intro?.mimeType || 'image/jpeg' });
+    });
+    return [...result.values()];
+  }
+  async function readOfflineImageMetadata() {
+    const db = await openScheduleImageDatabase();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(['images', 'metadata'], 'readonly');
+      const metadataRequest = transaction.objectStore('metadata').getAll();
+      let metadata = null;
+      let keys = null;
+      const finish = () => {
+        if (!metadata || !keys) return;
+        db.close();
+        resolve({ metadata, keys });
+      };
+      metadataRequest.onsuccess = () => {
+        metadata = metadataRequest.result || [];
+        if (metadata.length) {
+          keys = metadata.map((entry) => entry.key || entry.fileId).filter(Boolean);
+          finish();
+          return;
+        }
+        const keysRequest = transaction.objectStore('images').getAllKeys();
+        keysRequest.onsuccess = () => { keys = keysRequest.result || []; finish(); };
+        keysRequest.onerror = () => { db.close(); reject(keysRequest.error); };
+      };
+      transaction.onerror = () => { db.close(); reject(transaction.error); };
+    });
+  }
+  async function loadOfflineImageCache() {
+    if (offlineImageCacheLoaded) return;
+    if (offlineImageCacheLoadPromise) return offlineImageCacheLoadPromise;
+    offlineImageCacheLoadPromise = (async () => {
+      try {
+        const { metadata, keys } = await readOfflineImageMetadata();
+        keys.forEach((key) => offlineImageKeys.add(String(key)));
+        metadata.forEach((entry) => {
+          const id = String(entry?.fileId || entry?.key || '');
+          if (id) {
+            offlineImageKeys.add(id);
+            offlineImageSources.set(id, String(entry.sourceUrl || ''));
+          }
+        });
+        offlineImageCacheLoaded = true;
+      } catch (error) {
+        console.warn('Cache gambar offline tidak dapat dimuat:', error);
+      }
+    })();
+    try { await offlineImageCacheLoadPromise; }
+    finally { offlineImageCacheLoadPromise = null; }
+  }
+  async function readOfflineImageBlob(id) {
+    const db = await openScheduleImageDatabase();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction('images', 'readonly').objectStore('images').get(String(id));
+      request.onsuccess = () => { db.close(); resolve(request.result?.blob instanceof Blob ? request.result.blob : null); };
+      request.onerror = () => { db.close(); reject(request.error); };
+    });
+  }
+  async function ensureOfflineImageObjectUrl(id) {
+    const key = String(id || '');
+    if (!key) return '';
+    if (!offlineImageCacheLoaded) await loadOfflineImageCache();
+    const existing = offlineImageObjectUrls.get(key);
+    if (existing) return existing;
+    if (!offlineImageKeys.has(key)) return '';
+    try {
+      const blob = await readOfflineImageBlob(key);
+      if (!(blob instanceof Blob)) return '';
+      const url = URL.createObjectURL(blob);
+      offlineImageObjectUrls.set(key, url);
+      return url;
+    } catch (error) {
+      return '';
+    }
+  }
+  async function clearOfflineImageCache() {
+    try {
+      const db = await openScheduleImageDatabase();
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(['images', 'metadata'], 'readwrite');
+        transaction.objectStore('images').clear();
+        transaction.objectStore('metadata').clear();
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error || new Error('Gagal menghapus gambar offline.'));
+      });
+      db.close();
+    } finally {
+      offlineImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+      offlineImageObjectUrls.clear();
+      offlineImageKeys.clear();
+      offlineImageSources.clear();
+      try { localStorage.removeItem(OFFLINE_DOWNLOAD_STATE_KEY); } catch (error) {}
+      offlineImageCacheLoaded = true;
+      scheduleImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+      scheduleImageObjectUrls.clear();
+    }
+  }
+  async function downloadOfflineImage(file) {
+    const id = String(file?.id || '');
+    if (!id) return false;
+    if (offlineImageKeys.has(id) && offlineImageSources.get(id) === String(file.source || '')) return true;
+    const source = String(file.source || '');
+    const candidates = [
+      `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w2000`,
+      `https://lh3.googleusercontent.com/d/${encodeURIComponent(id)}=w2000`,
+      `https://drive.google.com/uc?export=view&id=${encodeURIComponent(id)}`,
+      source
+    ].filter(Boolean);
+    let blob = null;
+    for (const url of [...new Set(candidates)]) {
+      try {
+        const response = await fetch(url, { mode: 'cors', credentials: 'omit', cache: 'no-store' });
+        const contentType = (response.headers.get('content-type') || '').toLowerCase();
+        if (!response.ok || !contentType.startsWith('image/')) continue;
+        blob = await response.blob();
+        if (blob.size) break;
+      } catch (error) {}
+    }
+    if (!blob) return false;
+    const db = await openScheduleImageDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(['images', 'metadata'], 'readwrite');
+      transaction.objectStore('images').put({ key: id, fileId: id, blob, mimeType: blob.type || file.mimeType || 'image/jpeg', sourceUrl: source, fileName: file.name || id, updatedAt: Date.now() });
+      transaction.objectStore('metadata').put({ key: id, fileId: id, sourceUrl: source, bytes: blob.size, mimeType: blob.type || file.mimeType || 'image/jpeg', updatedAt: Date.now() });
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('Penyimpanan gambar offline penuh.'));
+    });
+    db.close();
+    const oldUrl = offlineImageObjectUrls.get(id);
+    if (oldUrl) URL.revokeObjectURL(oldUrl);
+    offlineImageKeys.add(id);
+    offlineImageSources.set(id, source);
+    offlineImageObjectUrls.delete(id);
+    return true;
+  }
+  async function downloadAllOfflineImages() {
+    if (offlineImageDownloadInFlight) return;
+    offlineImageDownloadInFlight = true;
+    try {
+      await loadOfflineImageCache();
+      const files = allScoreImageFiles();
+      let saved = 0;
+      const completed = new Set();
+      try {
+        const stored = JSON.parse(localStorage.getItem(OFFLINE_DOWNLOAD_STATE_KEY) || 'null');
+        (Array.isArray(stored?.completed) ? stored.completed : []).forEach((id) => completed.add(String(id)));
+      } catch (error) {}
+      const queue = files.map((file) => file.id);
+      try { localStorage.setItem(OFFLINE_DOWNLOAD_STATE_KEY, JSON.stringify({ queue, completed: [...completed], updatedAt: Date.now() })); } catch (error) {}
+      for (const file of files) {
+        if (completed.has(file.id) && offlineImageKeys.has(file.id) && offlineImageSources.get(file.id) === String(file.source || '')) { saved += 1; continue; }
+        if (offlineSettingsStatus) offlineSettingsStatus.textContent = `Mengunduh gambar ${saved + 1} dari ${files.length}…`;
+        if (offlineStorageUsage) { offlineStorageUsage.hidden = false; offlineStorageUsage.textContent = `(Mengunduh gambar ${saved + 1} dari ${files.length}…)`; }
+        if (await downloadOfflineImage(file)) {
+          saved += 1;
+          completed.add(file.id);
+          try { localStorage.setItem(OFFLINE_DOWNLOAD_STATE_KEY, JSON.stringify({ queue, completed: [...completed], updatedAt: Date.now() })); } catch (error) {}
+        }
+      }
+      try { localStorage.removeItem(OFFLINE_DOWNLOAD_STATE_KEY); } catch (error) {}
+      offlineImageCacheLoaded = true;
+      if (offlineSettingsStatus) offlineSettingsStatus.textContent = files.length ? `${saved} dari ${files.length} gambar disimpan offline.` : 'Belum ada gambar partitur untuk disimpan.';
+      renderList();
+      renderMySongs();
+      if (scoreImageDialog?.open) renderFullScoreImage();
+      void updateOfflineStorageUsage();
+    } catch (error) {
+      if (offlineSettingsStatus) offlineSettingsStatus.textContent = 'Unduhan gambar akan dilanjutkan saat aplikasi dibuka kembali.';
+      console.warn('Unduhan gambar offline terhenti:', error);
+    } finally {
+      offlineImageDownloadInFlight = false;
+    }
+  }
+  async function reconcileOfflineImageCache() {
+    if (!offlineAppEnabled) return;
+    await loadOfflineImageCache();
+    const current = new Map(allScoreImageFiles().map((file) => [file.id, String(file.source || '')]));
+    const removeIds = [...offlineImageKeys].filter((id) => !current.has(id) && mySongsLoaded);
+    const changedIds = [...offlineImageKeys].filter((id) => current.has(id) && offlineImageSources.get(id) !== current.get(id));
+    const idsToRemove = [...new Set([...removeIds, ...changedIds])];
+    if (idsToRemove.length) {
+      const db = await openScheduleImageDatabase();
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(['images', 'metadata'], 'readwrite');
+        idsToRemove.forEach((id) => { transaction.objectStore('images').delete(id); transaction.objectStore('metadata').delete(id); });
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+      idsToRemove.forEach((id) => {
+        const url = offlineImageObjectUrls.get(id);
+        if (url) URL.revokeObjectURL(url);
+        offlineImageObjectUrls.delete(id);
+        offlineImageKeys.delete(id);
+        offlineImageSources.delete(id);
+      });
+    }
+    if (idsToRemove.length) void updateOfflineStorageUsage();
+  }
+  async function readScheduleImageBytes() {
+    try {
+      const db = await openScheduleImageDatabase();
+      const total = await new Promise((resolve, reject) => {
+        const transaction = db.transaction(['images', 'metadata'], 'readonly');
+        const metadataRequest = transaction.objectStore('metadata').getAll();
+        metadataRequest.onsuccess = () => {
+          const metadata = metadataRequest.result || [];
+          const known = metadata.reduce((sum, entry) => sum + (Number(entry.bytes) || 0), 0);
+          if (metadata.length) { resolve(known); return; }
+          let bytes = 0;
+          const cursorRequest = transaction.objectStore('images').openCursor();
+          cursorRequest.onsuccess = () => {
+            const cursor = cursorRequest.result;
+            if (!cursor) { resolve(bytes); return; }
+            bytes += imageDataBytes(cursor.value?.blob || cursor.value?.file || cursor.value?.data);
+            cursor.continue();
+          };
+          cursorRequest.onerror = () => reject(cursorRequest.error);
+        };
+        transaction.onerror = () => reject(transaction.error);
+      });
+      db.close();
+      return total;
+    } catch (error) {
+      return 0;
+    }
+  }
+  function formatOfflineImageMemory(bytes) {
+    const megabytes = Math.max(0, Number(bytes) || 0) / (1024 * 1024);
+    return `${megabytes >= 10 ? megabytes.toFixed(0) : megabytes.toFixed(1)}Mb`;
+  }
+  async function updateOfflineStorageUsage() {
+    if (!offlineAppEnabled || !offlineStorageUsage) return;
+    const requestId = ++offlineStorageUsageRequestId;
+    offlineStorageUsage.hidden = false;
+    offlineStorageUsage.textContent = '(Memori gambar sedang dihitung…)';
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
+    if (!offlineAppEnabled || requestId !== offlineStorageUsageRequestId) return;
+    const totalBytes = localImageBytes() + await readScheduleImageBytes();
+    if (!offlineAppEnabled || requestId !== offlineStorageUsageRequestId) return;
+    offlineStorageUsage.textContent = `(Memori yang digunakan untuk gambar ${formatOfflineImageMemory(totalBytes)})`;
+  }
+  function renderOfflineAppStatus() {
+    if (!offlineSettingsButton || !offlineSettingsLabel || !offlineStorageUsage) return;
+    offlineSettingsLabel.textContent = offlineAppEnabled ? 'Offline App' : 'Aktifkan Offline App';
+    offlineSettingsButton.title = offlineAppEnabled ? 'Offline App aktif' : 'Aktifkan Offline App';
+    offlineSettingsButton.setAttribute('aria-label', offlineSettingsButton.title);
+    offlineSettingsButton.classList.toggle('is-enabled', offlineAppEnabled);
+    offlineStorageUsage.hidden = !offlineAppEnabled;
+    if (offlineAppEnabled) void updateOfflineStorageUsage();
   }
   function readProfileUserName() {
     try { return String(localStorage.getItem(PROFILE_USER_NAME_KEY) || '').trim(); }
@@ -409,28 +798,56 @@
       localStorage.setItem(FONT_STYLE_KEY, fontStyle);
       localStorage.setItem(FONT_SIZE_KEY, fontSize);
     } catch (error) { /* Theme still applies for this page view. */ }
+    syncNativeSystemBars();
   }
-  function applyUserFontScale(percent) {
+  function syncNativeSystemBars(forceScoreBackground = null) {
+    const bridge = window.AndroidSystemBars;
+    if (!bridge || typeof bridge.setSystemBars !== 'function') return;
+    const scoreIsOpen = forceScoreBackground === null ? Boolean(scoreImageDialog?.open) : Boolean(forceScoreBackground);
+    const activeTheme = document.documentElement.dataset.theme || 'light';
+    const computedStyle = getComputedStyle(document.documentElement);
+    const pageBackground = computedStyle.getPropertyValue('--page-bg').trim() || '#f5f7f3';
+    const barColor = scoreIsOpen ? '#000000' : pageBackground;
+    const darkIcons = !scoreIsOpen && activeTheme !== 'dark';
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) themeColorMeta.setAttribute('content', barColor);
+    try {
+      bridge.setSystemBars(barColor, darkIcons);
+    } catch (error) { /* The web app remains usable outside the Android wrapper. */ }
+  }
+  function applyUserFontScale(percent, addedRoots = null) {
     const multiplier = Math.max(1, Math.min(1.3, Number(percent) / 100 || 1));
-    activeFontSizeMultiplier = multiplier;
-    // Remove only the declarations written by this feature before measuring
-    // newly rendered elements. This prevents nested elements from inheriting a
-    // previously scaled parent and being scaled twice.
-    fontSizeScaledElements.forEach((element) => {
-      if (!element.isConnected) {
-        fontSizeScaledElements.delete(element);
-        return;
-      }
-      const original = fontSizeOriginalInlineStyles.get(element);
-      if (!original || !original.value) element.style.removeProperty('font-size');
-      else element.style.setProperty('font-size', original.value, original.priority);
-    });
-    fontSizeScaledElements.clear();
-    // Scale the actual text-bearing elements instead of only the first layer of
-    // each screen. This also covers dialogs and content rendered after startup.
+    if (multiplier === 1 && activeFontSizeMultiplier === 1 && fontSizeScaledElements.size === 0) return;
+    const isIncremental = Array.isArray(addedRoots);
+    if (!isIncremental) {
+      activeFontSizeMultiplier = multiplier;
+      // Remove only declarations written by this feature before measuring the
+      // whole document. This prevents nested elements from inheriting a
+      // previously scaled parent and being scaled twice.
+      fontSizeScaledElements.forEach((element) => {
+        if (!element.isConnected) {
+          fontSizeScaledElements.delete(element);
+          return;
+        }
+        const original = fontSizeOriginalInlineStyles.get(element);
+        if (!original || !original.value) element.style.removeProperty('font-size');
+        else element.style.setProperty('font-size', original.value, original.priority);
+      });
+      fontSizeScaledElements.clear();
+    }
+    // Scale actual text-bearing elements. On DOM mutations, only inspect the
+    // newly inserted subtrees; walking the entire body for every song-list
+    // chunk was blocking taps in the Android WebView.
     const excluded = 'script, style, svg, path, circle, ellipse, line, polyline, polygon, rect, use, .song-content pre, .my-song-add-action, #song-list .add-to-schedule, #score-key-watermark, #score-key-watermark-value, #key-watermark-preview, #key-watermark-preview *';
     const scalableElements = [];
-    document.querySelectorAll('body *').forEach((element) => {
+    const roots = isIncremental ? addedRoots : [document.body];
+    const candidates = new Set();
+    roots.forEach((root) => {
+      if (!root || root.nodeType !== Node.ELEMENT_NODE || !root.isConnected) return;
+      candidates.add(root);
+      root.querySelectorAll('*').forEach((element) => candidates.add(element));
+    });
+    candidates.forEach((element) => {
       if (element.matches(excluded) || element.closest(excluded)) return;
       const hasDirectText = Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
       const isTextControl = element.matches('button,select,textarea,input:not([type="checkbox"]):not([type="radio"]):not([type="file"])');
@@ -466,13 +883,28 @@
         fontSizeScaledElements.add(element);
       }
     });
-    // Refit preformatted lyrics after the scale changes, once layout is ready.
-    // The deferred call also keeps initialisation safe before the resize state
-    // used by scheduleSongFit has been created.
-    if (typeof scheduleSongFit === 'function') window.requestAnimationFrame(() => scheduleSongFit());
+    // Refit preformatted lyrics after an explicit scale change. Incremental
+    // list updates do not contain lyric blocks and should not trigger a full
+    // layout pass.
+    if (!isIncremental && typeof scheduleSongFit === 'function') window.requestAnimationFrame(() => scheduleSongFit());
   }
-  const fontSizeObserver = new MutationObserver(() => {
-    window.requestAnimationFrame(() => applyUserFontScale(Number(fontSizeSelect.value) || 100));
+  let fontScaleObserverFrame = 0;
+  const fontScaleObserverRoots = new Set();
+  const fontSizeObserver = new MutationObserver((mutations) => {
+    if (Number(fontSizeSelect.value) === 100) {
+      fontScaleObserverRoots.clear();
+      return;
+    }
+    mutations.forEach((mutation) => mutation.addedNodes.forEach((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE) fontScaleObserverRoots.add(node);
+    }));
+    if (fontScaleObserverFrame || !fontScaleObserverRoots.size) return;
+    fontScaleObserverFrame = window.requestAnimationFrame(() => {
+      fontScaleObserverFrame = 0;
+      const roots = [...fontScaleObserverRoots];
+      fontScaleObserverRoots.clear();
+      applyUserFontScale(Number(fontSizeSelect.value) || 100, roots);
+    });
   });
   fontSizeObserver.observe(document.body, { childList: true, subtree: true });
   function escapeText(value) {
@@ -524,6 +956,8 @@
       }
       songs = Array.isArray(result.songs) ? result.songs : [];
       songs.sort(compareSongs);
+      collectionVisibleCache = null;
+      collectionSortedCache = null;
       if (forceFresh && trackRefresh && readProfileUserName()) {
         trackSuccessfulAction('collection_refresh_success', {
           collection: 'Koleksi Lagu',
@@ -542,8 +976,12 @@
       count.textContent = String(songs.length);
       if (document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView === 'collection') updateHeaderIdentity('collection');
       buildFilters();
-      renderList();
-      renderSchedules();
+      window.requestAnimationFrame(() => {
+        if (isSidebarViewActive('collection')) cancelNavigationRender();
+        renderList();
+        renderSchedules();
+      });
+      if (offlineAppEnabled) void reconcileOfflineImageCache().finally(() => downloadAllOfflineImages());
     }
 
     window.SongBookCallbacks = window.SongBookCallbacks || {};
@@ -641,14 +1079,20 @@
       if (!cached || !Array.isArray(cached.songs)) return;
       songs = cached.songs;
       songs.sort(compareSongs);
+      collectionVisibleCache = null;
+      collectionSortedCache = null;
       cachedSongsUpdatedAt = cached.updatedAt || null;
       cacheAvailable = true;
       count.textContent = String(songs.length);
       if (document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView === 'collection') updateHeaderIdentity('collection');
       setSyncStatus(`Update terakhir: ${formatUpdatedAt(cached.updatedAt)}`);
       buildFilters();
-      renderList();
-      renderSchedules();
+      window.requestAnimationFrame(() => {
+        if (isSidebarViewActive('collection')) cancelNavigationRender();
+        renderList();
+        renderSchedules();
+      });
+      if (offlineAppEnabled) window.setTimeout(() => { if (offlineAppEnabled) void downloadAllOfflineImages(); }, 900);
       return true;
     } catch (error) {
       cacheAvailable = false;
@@ -781,7 +1225,7 @@
   }
 
   function defaultKeyWatermarkSettings() {
-    return { showKey: true, showGenre: true, showNote: true, fontSize: 19, genreFontSize: 6, noteFontSize: 5, transparency: 45, color: '#176b4b', genreColor: '#176b4b', noteColor: '#176b4b', outlineWidth: 0, outlineColor: '#000000', outlinePosition: 'outer', shadowWidth: 2, shadowColor: '#000000', shadowX: 0, shadowY: 2, shadowBlur: 9 };
+    return { showKey: true, showGenre: true, showNote: true, textAlign: 'center', fontSize: 19, genreFontSize: 6, noteFontSize: 5, color: '#176b4b', genreColor: '#176b4b', noteColor: '#176b4b', keyTransparency: 45, genreTransparency: 45, noteTransparency: 45, keyOutlineWidth: 0, genreOutlineWidth: 0, noteOutlineWidth: 0, keyOutlineColor: '#000000', genreOutlineColor: '#000000', noteOutlineColor: '#000000', keyOutlinePosition: 'outer', genreOutlinePosition: 'outer', noteOutlinePosition: 'outer', keyShadowWidth: 2, genreShadowWidth: 2, noteShadowWidth: 2, keyShadowColor: '#000000', genreShadowColor: '#000000', noteShadowColor: '#000000', keyShadowX: 0, genreShadowX: 0, noteShadowX: 0, keyShadowY: 2, genreShadowY: 2, noteShadowY: 2, keyShadowBlur: 9, genreShadowBlur: 9, noteShadowBlur: 9 };
   }
 
   function readKeyWatermarkSettings() {
@@ -798,15 +1242,22 @@
 
   function normalizeKeyWatermarkSettings(value) {
     const defaults = defaultKeyWatermarkSettings();
-    const source = value && typeof value === 'object' ? value : {};
+    const rawSource = value && typeof value === 'object' ? value : {};
+    // Migrate settings saved before per-line controls were introduced.
+    const source = { ...rawSource };
+    ['Transparency', 'OutlineWidth', 'OutlineColor', 'OutlinePosition', 'ShadowWidth', 'ShadowColor', 'ShadowX', 'ShadowY', 'ShadowBlur'].forEach((suffix) => {
+      const legacy = rawSource[suffix[0].toLowerCase() + suffix.slice(1)];
+      if (legacy !== undefined) ['key', 'genre', 'note'].forEach((prefix) => { if (source[`${prefix}${suffix}`] === undefined) source[`${prefix}${suffix}`] = legacy; });
+    });
     const normalized = Object.fromEntries(Object.entries(defaults).map(([name, fallback]) => {
-      if (name === 'color' || name === 'genreColor' || name === 'noteColor' || name === 'outlineColor' || name === 'shadowColor') return [name, /^#[0-9a-f]{6}$/i.test(String(source[name] || '')) ? String(source[name]) : fallback];
+      if (name.toLowerCase().includes('color')) return [name, /^#[0-9a-f]{6}$/i.test(String(source[name] || '')) ? String(source[name]) : fallback];
       if (name === 'showKey' || name === 'showGenre' || name === 'showNote') return [name, source[name] === undefined ? fallback : Boolean(source[name])];
-      if (name === 'outlinePosition') return [name, source[name] === 'inner' ? 'inner' : 'outer'];
+      if (name === 'textAlign') return [name, ['left', 'center', 'right'].includes(source[name]) ? source[name] : fallback];
+      if (name.toLowerCase().includes('position')) return [name, source[name] === 'inner' ? 'inner' : 'outer'];
       const number = Number(source[name]);
       return [name, Number.isFinite(number) ? number : fallback];
     }));
-    normalized.transparency = Math.max(0, Math.min(100, normalized.transparency));
+    ['keyTransparency', 'genreTransparency', 'noteTransparency'].forEach((name) => { normalized[name] = Math.max(0, Math.min(100, normalized[name])); });
     normalized.genreFontSize = Math.max(2, Math.min(20, normalized.genreFontSize));
     normalized.noteFontSize = Math.max(2, Math.min(20, normalized.noteFontSize));
     return normalized;
@@ -849,6 +1300,8 @@
       })) : [];
       activeScheduleId = localStorage.getItem(ACTIVE_SCHEDULE_KEY) || '';
       schedulesDisabled = localStorage.getItem(SCHEDULES_DISABLED_KEY) === '1';
+      if (schedulesDisabled) activeScheduleId = '';
+      else if (!schedules.some((schedule) => schedule.id === activeScheduleId)) activeScheduleId = schedules[0]?.id || '';
     } catch (error) {
       schedules = [];
     }
@@ -1141,7 +1594,7 @@
       activeScheduleId = imported.id;
       const saved = saveSchedules();
       renderSchedules();
-      renderList();
+      refreshScheduleTargetControls();
       document.getElementById('pull-schedule-code').value = '';
       pullDialog.close();
       highlightNewSchedule(imported.id);
@@ -1151,6 +1604,14 @@
   }
 
   function renderSchedules() {
+    // The schedule editor is a separate screen. Rebuilding every schedule
+    // card while the user is browsing the collection only competes with
+    // pointer events; the next visit renders the latest state.
+    if (!isSidebarViewActive('schedule') && !scheduleViewDialog.open) {
+      scheduleRenderPending = true;
+      return;
+    }
+    scheduleRenderPending = false;
     if (typeof updateHeaderIdentity === 'function' && document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView === 'schedule') updateHeaderIdentity('schedule');
     renderShareButtonState();
     renderScheduleTargets();
@@ -1222,19 +1683,19 @@
       const visibleNumber = displaySongNumber(song.number || entry.number);
       const sourceClass = String(entry.id || '').startsWith('local_') ? ' is-local-song' : ' is-database-song';
       const localAttribution = entry.localSourceName ? `<span class="schedule-song-attribution">Diambil dari data lokal “${escapeText(entry.localSourceName)}”</span>` : '';
+      const songLabel = [song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).join(' ');
+      const scheduleNote = normalizeScheduleNote(entry.note);
+      const fullSongLabel = `${songLabel}${song.key ? ` (${song.key})` : ''}${song.genre ? ` - ${song.genre}` : ''}${scheduleNote ? ` - ${scheduleNote}` : ''}`;
       return `<li class="schedule-song-row${sourceClass}${entry.preWorship ? ' is-pre-worship' : ''}" data-entry-id="${escapeText(entry.entryId)}">
-        <button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button>
-        <span class="schedule-song-order">${index + 1}</span>
-        <button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}</span><span class="schedule-song-compact-name"><span class="schedule-song-compact-copy"><span class="schedule-song-compact-text">${[song.category || entry.category, visibleNumber, displaySongTitle({ ...song, title: song.title || entry.title })].filter(Boolean).map(escapeText).join(' ')}${song.key ? ` (${escapeText(song.key)})` : ''}${song.genre ? ` - ${escapeText(song.genre)}` : ''}</span>${normalizeScheduleNote(entry.note) ? `<span class="schedule-song-compact-note"><em> - ${escapeText(normalizeScheduleNote(entry.note))}</em></span>` : ''}</span>${entry.preWorship ? '<span class="schedule-song-pre-label">(Pra)</span>' : ''}</span>${localAttribution}</button>
-        <span class="schedule-song-actions">
+        <div class="schedule-song-top-row"><span class="schedule-song-order">${index + 1}</span><button type="button" class="schedule-song-name" data-action="preview-song" title="Buka preview"><span class="schedule-song-full-name">${escapeText(fullSongLabel)}</span><span class="schedule-song-compact-name"><span class="schedule-song-compact-copy"><span class="schedule-song-compact-text">${escapeText(songLabel)}${song.key ? ` (${escapeText(song.key)})` : ''}${song.genre ? ` - ${escapeText(song.genre)}` : ''}</span>${scheduleNote ? `<span class="schedule-song-compact-note"><em> - ${escapeText(scheduleNote)}</em></span>` : ''}</span>${entry.preWorship ? '<span class="schedule-song-pre-label">(Pra)</span>' : ''}</span>${localAttribution}</button><button type="button" class="schedule-note-button${entry.note ? ' has-note' : ''}" data-action="edit-note" data-entry-id="${escapeText(entry.entryId)}" aria-label="${entry.note ? 'Edit catatan lagu' : 'Tambah catatan lagu'}" title="${entry.note ? 'Edit catatan' : 'Tambah catatan'}" aria-expanded="false">Catatan</button></div>
+        <div class="schedule-song-bottom-row"><button type="button" class="schedule-drag-handle" aria-label="Seret untuk mengurutkan lagu" title="Seret untuk mengatur urutan">&#8942;</button><span class="schedule-song-actions">
           <label class="pre-worship-toggle"><input type="checkbox" data-action="toggle-pre-worship" data-entry-id="${escapeText(entry.entryId)}" ${entry.preWorship ? 'checked' : ''}><span>Pra-ibadah</span></label>
           <button type="button" data-action="copy-to-my-songs" data-entry-id="${escapeText(entry.entryId)}" aria-label="Add to Laguku: ${escapeText(song.title || entry.title || '')}" title="Add to Laguku">Laguku</button>
           <button type="button" data-action="move-up" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke atas" ${index === 0 ? 'disabled' : ''}>&#8593;</button>
           <button type="button" data-action="move-down" data-entry-id="${escapeText(entry.entryId)}" aria-label="Pindahkan lagu ke bawah" ${index === schedule.songs.length - 1 ? 'disabled' : ''}>&#8595;</button>
           <button type="button" data-action="edit-song" data-entry-id="${escapeText(entry.entryId)}" aria-label="Edit lagu di jadwal">&#9998;</button>
           <button type="button" class="remove-scheduled-song" data-action="remove-song" data-entry-id="${escapeText(entry.entryId)}" aria-label="Hapus lagu dari jadwal" title="Hapus lagu"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button>
-        </span>
-        <button type="button" class="schedule-note-button${entry.note ? ' has-note' : ''}" data-action="edit-note" data-entry-id="${escapeText(entry.entryId)}" aria-label="${entry.note ? 'Edit catatan lagu' : 'Tambah catatan lagu'}" title="${entry.note ? 'Edit catatan' : 'Tambah catatan'}" aria-expanded="false">Catatan</button>
+        </span></div>
         <div class="schedule-note-editor" data-note-editor="${escapeText(entry.entryId)}" hidden><label for="schedule-note-${escapeText(entry.entryId)}">Catatan lagu <span class="schedule-note-count">${normalizeScheduleNote(entry.note).trim() ? normalizeScheduleNote(entry.note).trim().split(/\s+/).length : 0}/20 kata</span></label><textarea id="schedule-note-${escapeText(entry.entryId)}" data-note-entry-id="${escapeText(entry.entryId)}" maxlength="300" rows="2" placeholder="Contoh: Intro Biola">${escapeText(entry.note || '')}</textarea><div class="schedule-note-actions"><button type="button" data-action="cancel-note" data-entry-id="${escapeText(entry.entryId)}">Batal</button><button type="button" class="schedule-note-save" data-action="save-note" data-entry-id="${escapeText(entry.entryId)}">Simpan catatan</button></div></div>
       </li>`;
     }).join('');
@@ -1279,6 +1740,7 @@
       delete pendingScheduleIntroUpdates[scheduleId];
       scheduleIntros[scheduleId] = schedule.sharedIntro;
       showScheduleIntro(schedule.sharedIntro, false);
+      if (offlineAppEnabled) window.setTimeout(() => { if (offlineAppEnabled) void downloadAllOfflineImages(); }, 900);
       return;
     }
     const hasCachedIntro = Object.prototype.hasOwnProperty.call(scheduleIntros, scheduleId);
@@ -1310,6 +1772,7 @@
         scheduleIntros[scheduleId] = latestIntro;
         persistScheduleIntroCache();
         showScheduleIntro(latestIntro, false);
+        if (offlineAppEnabled) void downloadAllOfflineImages();
       }
     } catch (error) {
       console.warn('Intro jadwal tidak dapat dimuat:', error);
@@ -1392,6 +1855,7 @@
     if (closeLabel) closeLabel.textContent = returnLabel;
     document.getElementById('close-score-image').setAttribute('aria-label', `Tutup gambar dan ${returnLabel.toLowerCase()}`);
     if (!scoreImageDialog.open) scoreImageDialog.showModal();
+    syncNativeSystemBars(true);
     renderFullScoreImage();
     showScoreImageControls();
   }
@@ -1499,7 +1963,7 @@
     schedules = schedules.filter((schedule) => schedule.id !== scheduleId);
     saveSchedules();
     renderSchedules();
-    renderList();
+    refreshScheduleTargetControls();
     if (viewedScheduleId === scheduleId && scheduleViewDialog.open) scheduleViewDialog.close();
   }
 
@@ -1516,9 +1980,10 @@
     try {
       const db = await openScheduleImageDatabase();
       await new Promise((resolve, reject) => {
-        const transaction = db.transaction('images', 'readwrite');
+        const transaction = db.transaction(['images', 'metadata'], 'readwrite');
         const store = transaction.objectStore('images');
-        keys.forEach((key) => store.delete(key));
+        const metadataStore = transaction.objectStore('metadata');
+        keys.forEach((key) => { store.delete(key); metadataStore.delete(key); });
         transaction.oncomplete = resolve;
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error || new Error('Gagal menghapus salinan gambar jadwal.'));
@@ -1539,6 +2004,7 @@
       activeScheduleId = '';
       try { localStorage.removeItem(ACTIVE_SCHEDULE_KEY); } catch (error) { /* Ignore unavailable storage. */ }
       updateScheduleDeactivateActionState();
+      refreshScheduleTargetControls();
       return;
     }
     if (!schedules.some((schedule) => schedule.id === activeScheduleId)) activeScheduleId = schedules[0] ? schedules[0].id : '';
@@ -1547,6 +2013,7 @@
       else localStorage.removeItem(ACTIVE_SCHEDULE_KEY);
     } catch (error) { console.warn('Jadwal aktif tidak dapat disimpan:', error); }
     updateScheduleDeactivateActionState();
+    refreshScheduleTargetControls();
   }
 
   function updateScheduleDeactivateActionState() {
@@ -1573,6 +2040,21 @@
       container.hidden = false;
       container.innerHTML = `<span class="active-schedule-info-icon" aria-hidden="true">&#128197;</span><span class="active-schedule-info-copy"><strong>Jadwal yang Aktif</strong><span>${escapeText(title)} <span aria-hidden="true">&#183;</span> ${escapeText(date)} <span aria-hidden="true">&#183;</span> ${songCount} lagu</span></span>`;
     });
+  }
+  function refreshScheduleTargetControls() {
+    const enabled = Boolean(activeScheduleId) && !schedulesDisabled && schedules.length > 0;
+    // Only touch controls in the visible library. The other list can contain
+    // hundreds of cards; scanning it whenever a schedule is activated was
+    // blocking the next sidebar navigation. Mark the hidden list dirty so it
+    // is rendered with the current schedule when opened.
+    if (isSidebarViewActive('collection')) {
+      document.querySelectorAll('#song-list .add-to-schedule').forEach((button) => { button.hidden = !enabled; });
+      collectionScheduleControlsPending = false;
+    } else collectionScheduleControlsPending = true;
+    if (isSidebarViewActive('my-songs')) {
+      document.querySelectorAll('#my-songs-list .my-song-add-action').forEach((button) => { button.disabled = !enabled; });
+    } else mySongsRenderPending = true;
+    updateActiveScheduleInfo();
   }
 
   function showAppToast(message) {
@@ -1614,7 +2096,7 @@
     activeScheduleId = schedule.id;
     if (saveSchedules()) trackSuccessfulAction('schedule_create_success', { scheduleName: schedule.title });
     renderSchedules();
-    renderList();
+    refreshScheduleTargetControls();
     highlightNewSchedule(schedule.id);
     const titleInput = scheduleList.querySelector('.schedule-card:first-child .schedule-title-input');
     if (titleInput) { titleInput.focus(); titleInput.select(); }
@@ -1677,9 +2159,8 @@
     activeScheduleId = radio.value;
     schedulesDisabled = false;
     saveSchedules();
-    renderSchedules();
-    renderList();
-    renderMySongs();
+    refreshScheduleTargetControls();
+    window.requestAnimationFrame(() => renderSchedules());
     const selected = schedules.find((item) => item.id === activeScheduleId);
     scheduleStatus.textContent = `Jadwal aktif: ${selected.title || 'Jadwal tanpa nama'}.`;
   }
@@ -1688,9 +2169,8 @@
     schedulesDisabled = true;
     activeScheduleId = '';
     if (saveSchedules()) {
-      renderSchedules();
-      renderList();
-      renderMySongs();
+      refreshScheduleTargetControls();
+      window.requestAnimationFrame(() => renderSchedules());
       scheduleStatus.textContent = schedules.length
         ? 'Semua jadwal dinonaktifkan. Pilih jadwal untuk mengaktifkan kembali.'
         : 'Belum ada jadwal ibadah.';
@@ -1733,9 +2213,21 @@
 
   function openScheduleImageDatabase() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(SCHEDULE_IMAGE_DB_NAME, 1);
+      const request = indexedDB.open(SCHEDULE_IMAGE_DB_NAME, 2);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains('images')) request.result.createObjectStore('images', { keyPath: 'key' });
+        if (!request.result.objectStoreNames.contains('metadata')) request.result.createObjectStore('metadata', { keyPath: 'key' });
+        if (request.transaction && request.transaction.objectStoreNames.contains('images')) {
+          const images = request.transaction.objectStore('images');
+          const metadata = request.transaction.objectStore('metadata');
+          images.openCursor().onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor) return;
+            const value = cursor.value || {};
+            metadata.put({ key: String(value.fileId || value.key || cursor.key), fileId: String(value.fileId || value.key || cursor.key), sourceUrl: String(value.sourceUrl || ''), bytes: Number(value.blob?.size) || 0, mimeType: value.mimeType || value.blob?.type || 'image/jpeg', updatedAt: value.updatedAt || Date.now() });
+            cursor.continue();
+          };
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Penyimpanan gambar jadwal tidak tersedia.'));
@@ -1832,11 +2324,11 @@
     }
 
     if (action === 'view-schedule') {
-      renderScheduleView(schedule.id);
       if (!scheduleViewDialog.open) {
         scheduleViewDialog.showModal();
         document.body.classList.add('schedule-view-open');
       }
+      window.requestAnimationFrame(() => renderScheduleView(schedule.id));
       return;
     } else if (action === 'delete-schedule') {
       confirmScheduleDeletion(schedule);
@@ -1864,7 +2356,7 @@
       if (schedules.some((item) => item.id === viewedScheduleId)) renderScheduleView(viewedScheduleId);
       else scheduleViewDialog.close();
     }
-    renderList();
+    refreshScheduleTargetControls();
   }
 
   function handleScheduleRowClick(event) {
@@ -2086,7 +2578,17 @@
   }
 
   function handleSearchInput() {
-    renderList();
+    // Cancel an in-flight filter/list append immediately. This keeps a key
+    // press (and the following hamburger tap) from waiting behind stale
+    // search work.
+    cancelCollectionRender();
+    const query = normalizeSearch(search.value);
+    if (selectNumberSortForSearch(query, collectionSortSelect)) collectionSort = 'number-asc';
+    if (collectionSearchRenderTimer) window.clearTimeout(collectionSearchRenderTimer);
+    collectionSearchRenderTimer = window.setTimeout(() => {
+      collectionSearchRenderTimer = 0;
+      renderList({ renderLocalSongs: false });
+    }, 60);
   }
   function handleScheduleNoteInput(event) {
     const textarea = event.target.closest('textarea[data-note-entry-id]');
@@ -2117,8 +2619,11 @@
       }
       if (display && DATE_INPUT_TYPE === 'date') display.textContent = formatWorshipDate(schedule.date) || 'Pilih tanggal';
     }
-    saveSchedules();
-    renderScheduleTargets();
+    // Keep typing local to the current input. Persist on `change` after the
+    // user finishes editing so each keystroke does not serialize all schedules
+    // and refresh related UI.
+    if (input.dataset.field === 'title') return;
+    if (input.dataset.field === 'date') return;
   }
 
   function compareSongs(a, b) {
@@ -2144,7 +2649,7 @@
   }
 
   function songInputTime(song) {
-    const value = song.createdAt || song.created_at || song.storedAt || song.localUpdatedAt || 0;
+    const value = song.updatedAt || song.updated_at || song.localUpdatedAt || song.createdAt || song.created_at || song.storedAt || 0;
     const timestamp = typeof value === 'number' ? value : Date.parse(value);
     return Number.isFinite(timestamp) ? timestamp : 0;
   }
@@ -2176,15 +2681,108 @@
     });
   }
 
-  function renderList() {
+  function activeSidebarView() {
+    return document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView || '';
+  }
+
+  function isSidebarViewActive(view) {
+    return activeSidebarView() === view;
+  }
+
+  function cancelCollectionRender(options = {}) {
+    // Navigation keeps the current collection DOM in place. Search changes
+    // still mark it for a later render so the visible result stays coherent.
+    if (options.preserveView && songList.childElementCount) collectionRenderPending = false;
+    if (!options.preserveView && (collectionRenderActive || collectionSearchRenderTimer || collectionFilterTimer)) {
+      collectionRenderPending = true;
+    }
+    collectionRenderGeneration += 1;
+    collectionWorkGeneration += 1;
+    window.clearTimeout(collectionRenderTimer);
+    window.clearTimeout(collectionSearchRenderTimer);
+    window.clearTimeout(collectionFilterTimer);
+    window.cancelAnimationFrame(collectionFilterTimer);
+    collectionRenderTimer = 0;
+    collectionSearchRenderTimer = 0;
+    collectionFilterTimer = 0;
+    collectionRenderActive = false;
+  }
+
+  function renderList(options = {}) {
+    const renderLocalSongs = options.renderLocalSongs !== false;
+    if (!isSidebarViewActive('collection')) {
+      collectionRenderPending = true;
+      if (renderLocalSongs) mySongsRenderPending = true;
+      return;
+    }
+    cancelCollectionRender();
+    collectionRenderPending = false;
+    collectionScheduleControlsPending = false;
     updateActiveScheduleInfo();
-    const query = normalize(search.value.trim());
-    const visible = sortSongsForDisplay(songs.filter((song) => {
-      if (!matchesSongCategoryFilter(song, activeCategory)) return false;
-      if (!query) return true;
-      return normalize([song.category, song.number, song.title, song.key, song.genre, song.songCreator, song.dateCreate, song.tempo, stripHtml(song.contentHtml)].join(' ')).includes(query);
-    }), collectionSort);
-    renderMySongs();
+    const query = normalizeSearch(search.value);
+    const cacheKey = `${activeCategory}\u0000${collectionSort}\u0000${query}`;
+    let visible;
+    if (collectionVisibleCache
+      && collectionVisibleCache.source === songs
+      && collectionVisibleCache.key === cacheKey) {
+      visible = collectionVisibleCache.value;
+    } else {
+      if (!collectionSortedCache
+        || collectionSortedCache.source !== songs
+        || collectionSortedCache.mode !== collectionSort) {
+        // Sorting can be costly on a large library. Leave a short input
+        // window before doing that work so a hamburger tap after navigation
+        // is handled first, then continue in a new task.
+        const workGeneration = collectionWorkGeneration;
+        setStatus('Menyiapkan koleksi lagu…');
+        collectionFilterTimer = window.setTimeout(() => {
+          collectionFilterTimer = 0;
+          if (workGeneration !== collectionWorkGeneration || !isSidebarViewActive('collection')) return;
+          collectionSortedCache = {
+            source: songs,
+            mode: collectionSort,
+            value: sortSongsForDisplay(songs, collectionSort)
+          };
+          renderList(options);
+        }, 80);
+        return;
+      }
+      if (!query) {
+        visible = collectionSortedCache.value.filter((song) => matchesSongCategoryFilter(song, activeCategory));
+        collectionVisibleCache = { source: songs, key: cacheKey, value: visible };
+      } else {
+        // Searching previously called stripHtml/DOMParser for every song in
+        // one long task. Filter in small animation-frame batches so keyboard
+        // and sidebar pointer events remain responsive on mobile browsers.
+        const source = collectionSortedCache.value;
+        const filtered = [];
+        let index = 0;
+        const workGeneration = collectionWorkGeneration;
+        setStatus('Mencari lagu…');
+        const filterChunk = () => {
+          if (workGeneration !== collectionWorkGeneration || !isSidebarViewActive('collection')) return;
+          const end = Math.min(source.length, index + 12);
+          for (; index < end; index += 1) {
+            const song = source[index];
+            if (matchesSongCategoryFilter(song, activeCategory)
+              && searchTextMatches(getCollectionSearchText(song), query)) filtered.push(song);
+          }
+          if (index < source.length) {
+            collectionFilterTimer = window.requestAnimationFrame(filterChunk);
+            return;
+          }
+          collectionFilterTimer = 0;
+          collectionVisibleCache = { source: songs, key: cacheKey, value: filtered };
+          renderList(options);
+        };
+        collectionFilterTimer = window.requestAnimationFrame(filterChunk);
+        return;
+      }
+    }
+    if (renderLocalSongs) {
+      if (isSidebarViewActive('my-songs')) window.requestAnimationFrame(() => renderMySongs());
+      else mySongsRenderPending = true;
+    }
     songList.replaceChildren();
     if (!songs.length) {
       setStatus('Belum ada lagu di database. Tambahkan lagu melalui Song Manager.');
@@ -2195,23 +2793,31 @@
       return;
     }
     setStatus('');
-    const fragment = document.createDocumentFragment();
-    visible.forEach((song) => {
-      const card = document.createElement('article');
-      card.className = 'song-card';
-      const songIndex = songIndexMarkup(song);
-      const songMeta = songListMetaMarkup(song);
-      const openButton = document.createElement('button');
-      openButton.type = 'button';
-      openButton.className = 'song-card-main';
-      const referenceCount = songReferenceCount(song);
-      openButton.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}${referenceCount ? `, ${referenceCount} referensi` : ''}`);
-      openButton.innerHTML = `${songIndex}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
-      openButton.addEventListener('click', () => openSongFromList(song, songs, undefined, true));
-      card.append(openButton);
-      const quickActions = document.createElement('span');
-      quickActions.className = 'song-card-quick-actions';
-      if (schedules.length) {
+    const generation = collectionRenderGeneration;
+    collectionRenderActive = true;
+    const appendChunk = (start) => {
+      if (generation !== collectionRenderGeneration) return;
+      const fragment = document.createDocumentFragment();
+      // Smaller chunks keep pointer/touch events responsive on low-end
+      // Android WebViews while still filling the list over subsequent frames.
+      const chunkSize = window.matchMedia('(max-width: 600px)').matches ? 5 : 32;
+      const end = Math.min(visible.length, start + chunkSize);
+      for (let index = start; index < end; index += 1) {
+        const song = visible[index];
+        const card = document.createElement('article');
+        card.className = 'song-card';
+        const songIndex = songIndexMarkup(song);
+        const songMeta = songListMetaMarkup(song);
+        const openButton = document.createElement('button');
+        openButton.type = 'button';
+        openButton.className = 'song-card-main';
+        const referenceCount = songReferenceCount(song);
+        openButton.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}${referenceCount ? `, ${referenceCount} referensi` : ''}`);
+        openButton.innerHTML = `${songIndex}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
+        openButton.addEventListener('click', () => openSongFromList(song, songs, undefined, true));
+        card.append(openButton);
+        const quickActions = document.createElement('span');
+        quickActions.className = 'song-card-quick-actions';
         const addButton = document.createElement('button');
         addButton.type = 'button';
         addButton.className = 'add-to-schedule';
@@ -2219,28 +2825,46 @@
         addButton.setAttribute('aria-label', `Tambahkan ${song.title} ke jadwal terpilih`);
         addButton.title = 'Add to Jadwal';
         addButton.textContent = 'Add to Jadwal';
+        addButton.hidden = !(schedules.length && activeScheduleId && !schedulesDisabled);
         quickActions.append(addButton);
+        const saveLocalButton = document.createElement('button');
+        saveLocalButton.type = 'button';
+        saveLocalButton.className = 'add-to-my-songs';
+        saveLocalButton.dataset.saveSongToMySongs = song.id;
+        saveLocalButton.textContent = 'Add to Laguku';
+        saveLocalButton.setAttribute('aria-label', `Add ${song.category} ${displaySongNumber(song.number)} ${song.title} to Laguku`);
+        saveLocalButton.title = 'Simpan salinan lagu ini ke Laguku di perangkat';
+        quickActions.append(saveLocalButton);
+        card.append(quickActions);
+        fragment.append(card);
       }
-      const saveLocalButton = document.createElement('button');
-      saveLocalButton.type = 'button';
-      saveLocalButton.className = 'add-to-my-songs';
-      saveLocalButton.dataset.saveSongToMySongs = song.id;
-      saveLocalButton.textContent = 'Add to Laguku';
-      saveLocalButton.setAttribute('aria-label', `Add ${song.category} ${displaySongNumber(song.number)} ${song.title} to Laguku`);
-      saveLocalButton.title = 'Simpan salinan lagu ini ke Laguku di perangkat';
-      quickActions.append(saveLocalButton);
-      card.append(quickActions);
-      fragment.append(card);
-    });
-    songList.append(fragment);
+      songList.append(fragment);
+      if (end < visible.length && generation === collectionRenderGeneration) {
+        // Yield a full turn to input handling between chunks. This is
+        // especially important after clearing search, when every song is
+        // visible again and the list may contain hundreds of cards.
+        collectionRenderTimer = window.setTimeout(() => {
+          collectionRenderTimer = 0;
+          window.requestAnimationFrame(() => appendChunk(end));
+        }, 16);
+      } else if (generation === collectionRenderGeneration) {
+        collectionRenderActive = false;
+      }
+    };
+    appendChunk(0);
   }
 
   function renderMySongs() {
+    if (!isSidebarViewActive('my-songs')) {
+      mySongsRenderPending = true;
+      return;
+    }
+    mySongsRenderPending = false;
     updateActiveScheduleInfo();
-    const query = normalize(mySongsSearch.value.trim());
+    const query = normalizeSearch(mySongsSearch.value);
     const selectedCategory = mySongsCategoryFilter.value || 'ALL';
     const visibleSongs = mySongs.filter((song) => matchesSongCategoryFilter(song, selectedCategory)
-      && (!query || normalize([song.number, song.title, stripHtml(song.contentHtml)].join(' ')).includes(query)));
+      && searchTextMatches(getMySongSearchText(song), query));
     const visible = sortSongsForDisplay(visibleSongs, mySongsSort);
     mySongsCount.textContent = String(mySongs.length);
     mySongsList.classList.toggle('is-upload-request-mode', isMySongUploadMode);
@@ -2254,37 +2878,50 @@
       return;
     }
     mySongsStatus.textContent = '';
-    const fragment = document.createDocumentFragment();
-    visible.forEach((song, index) => {
-      const card = document.createElement('article');
-      card.className = 'song-card';
-      const songMeta = songListMetaMarkup(song);
-      if (isMySongUploadMode) {
-        const choice = document.createElement('label');
-        choice.className = 'my-song-upload-choice';
-        choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}>${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span>`;
-        card.append(choice);
+    const generation = ++mySongsRenderGeneration;
+    const appendChunk = (start) => {
+      if (generation !== mySongsRenderGeneration) return;
+      const fragment = document.createDocumentFragment();
+      const end = Math.min(visible.length, start + 40);
+      for (let index = start; index < end; index += 1) {
+        const song = visible[index];
+        const card = document.createElement('article');
+        card.className = 'song-card';
+        const songMeta = songListMetaMarkup(song);
+        if (isMySongUploadMode) {
+          const choice = document.createElement('label');
+          choice.className = 'my-song-upload-choice';
+          choice.innerHTML = `<input type="checkbox" data-upload-song-id="${escapeText(song.id)}" ${selectedMySongUploadIds.has(song.id) ? 'checked' : ''}>${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span>`;
+          card.append(choice);
+          fragment.append(card);
+          continue;
+        }
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'song-card-main';
+        const referenceCount = songReferenceCount(song);
+        button.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}${referenceCount ? `, ${referenceCount} referensi` : ''}`);
+        button.innerHTML = `${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
+        button.addEventListener('click', () => openSongFromList(song, visible, index));
+        card.append(button);
+        const actions = document.createElement('span');
+        actions.className = 'my-song-list-actions';
+        actions.innerHTML = `<button class="add-to-schedule my-song-add-action" type="button" data-my-song-action="add" data-song-id="${escapeText(song.id)}" aria-label="Tambahkan ${escapeText(song.title)} ke jadwal aktif" title="Tambahkan ke jadwal aktif" ${activeScheduleId ? '' : 'disabled'}>Add to Jadwal</button><span class="my-song-edit-actions"><button type="button" data-my-song-action="edit" data-song-id="${escapeText(song.id)}" aria-label="Edit ${escapeText(song.title)}" title="Edit">&#9998;</button><button type="button" data-my-song-action="delete" data-song-id="${escapeText(song.id)}" aria-label="Hapus ${escapeText(song.title)}" title="Hapus"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button></span>`;
+        card.append(actions);
         fragment.append(card);
-        return;
       }
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'song-card-main';
-      const referenceCount = songReferenceCount(song);
-      button.setAttribute('aria-label', `Buka ${song.category} ${displaySongNumber(song.number)}, ${song.title}${referenceCount ? `, ${referenceCount} referensi` : ''}`);
-      button.innerHTML = `${songIndexMarkup(song)}<span class="song-details"><span class="song-title">${escapeText(displaySongTitle(song))}</span><span class="song-subtitle">${songMeta}</span></span><span class="song-open" aria-hidden="true">&#8250;</span>`;
-      button.addEventListener('click', () => openSongFromList(song, visible, index));
-      card.append(button);
-      const actions = document.createElement('span');
-      actions.className = 'my-song-list-actions';
-      actions.innerHTML = `<button class="add-to-schedule my-song-add-action" type="button" data-my-song-action="add" data-song-id="${escapeText(song.id)}" aria-label="Tambahkan ${escapeText(song.title)} ke jadwal aktif" title="Tambahkan ke jadwal aktif" ${activeScheduleId ? '' : 'disabled'}>Add to Jadwal</button><span class="my-song-edit-actions"><button type="button" data-my-song-action="edit" data-song-id="${escapeText(song.id)}" aria-label="Edit ${escapeText(song.title)}" title="Edit">&#9998;</button><button type="button" data-my-song-action="delete" data-song-id="${escapeText(song.id)}" aria-label="Hapus ${escapeText(song.title)}" title="Hapus"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/></svg></button></span>`;
-      card.append(actions);
-      fragment.append(card);
-    });
-    mySongsList.append(fragment);
+      mySongsList.append(fragment);
+      if (end < visible.length) window.requestAnimationFrame(() => appendChunk(end));
+    };
+    appendChunk(0);
   }
 
-  mySongsSearch.addEventListener('input', renderMySongs);
+  function handleMySongsSearchInput() {
+    const query = normalizeSearch(mySongsSearch.value);
+    if (selectNumberSortForSearch(query, mySongsSortSelect)) mySongsSort = 'number-asc';
+    renderMySongs();
+  }
+  mySongsSearch.addEventListener('input', handleMySongsSearchInput);
   mySongsCategoryFilter.addEventListener('change', () => {
     mySongsCategoryChips.querySelectorAll('[data-my-songs-category]').forEach((item) => {
       const selected = item.dataset.mySongsCategory === mySongsCategoryFilter.value;
@@ -2537,6 +3174,7 @@
       db.close();
       mySongs.unshift(localSong);
       renderMySongs();
+      if (offlineAppEnabled) void updateOfflineStorageUsage();
       const message = `${[localSong.category, displaySongNumber(localSong.number), localSong.title].filter(Boolean).join(' ')} berhasil ditambahkan ke Laguku.`;
       mySongsStatus.textContent = message;
       setStatus(message);
@@ -2551,14 +3189,29 @@
   async function loadMySongs() {
     try {
       const db = await openMySongDatabase();
-      const records = await new Promise((resolve, reject) => {
-        const request = db.transaction(MY_SONG_STORE, 'readonly').objectStore(MY_SONG_STORE).getAll();
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
-      });
+      const records = [];
+      let lowerKey;
+      while (true) {
+        const batch = await new Promise((resolve, reject) => {
+          const store = db.transaction(MY_SONG_STORE, 'readonly').objectStore(MY_SONG_STORE);
+          const request = lowerKey === undefined
+            ? store.getAll(undefined, 8)
+            : store.getAll(IDBKeyRange.lowerBound(lowerKey, true), 8);
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => reject(request.error);
+        });
+        if (!batch.length) break;
+        records.push(...batch);
+        lowerKey = batch[batch.length - 1].id;
+        if (batch.length < 8) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
       db.close();
       mySongs = records.sort(compareSongs);
+      mySongsLoaded = true;
       renderMySongs();
+      if (offlineAppEnabled) void updateOfflineStorageUsage();
+      if (offlineAppEnabled) window.setTimeout(() => { if (offlineAppEnabled) void downloadAllOfflineImages(); }, 900);
     } catch (error) {
       mySongsStatus.textContent = 'Penyimpanan lagu lokal tidak tersedia di browser ini.';
       console.warn('Daftar Laguku tidak dapat dimuat:', error);
@@ -2733,7 +3386,9 @@
       previewButton.className = 'my-song-existing-score-preview';
       previewButton.dataset.imageIndex = String(index);
       const image = document.createElement('img');
-      image.src = (file && typeof file === 'object' && (file.url || file.dataUrl || file.data)) || '';
+      void resolveScoreImageSource(file).then((resolved) => {
+        if (resolved && image.isConnected) image.src = resolved.url;
+      });
       image.alt = `Gambar partitur tersimpan ${index + 1}`;
       const name = document.createElement('span');
       name.textContent = file && typeof file === 'object' && file.name ? file.name : `Gambar tersimpan ${index + 1}`;
@@ -2751,12 +3406,18 @@
     const instrument = name?.value === 'Others' ? row.querySelector('.my-song-other-instrument').value.trim() : name?.value;
     const selectedUrl = button.dataset.previewUrl;
     const file = selectedUrl ? null : editingMySong?.images?.[instrument]?.[Number(button.dataset.imageIndex)];
-    const url = selectedUrl || (file && typeof file === 'object' ? (file.url || file.dataUrl || file.data) : '');
-    if (!url) return;
     const dialog = document.getElementById('my-song-image-preview');
-    document.getElementById('my-song-image-preview-img').src = url;
+    const previewImage = document.getElementById('my-song-image-preview-img');
+    previewImage.removeAttribute('src');
     document.getElementById('my-song-image-preview-name').textContent = button.dataset.previewName || file?.name || 'Gambar partitur';
     dialog.showModal();
+    if (selectedUrl) {
+      previewImage.src = selectedUrl;
+      return;
+    }
+    void resolveScoreImageSource(file).then((resolved) => {
+      if (resolved && dialog.open) previewImage.src = resolved.url;
+    });
   });
 
   function populateMySongInstrumentSelect(select, otherInput, selectedName) {
@@ -2928,6 +3589,7 @@
       else mySongs.push(localSong);
       mySongs.sort(compareSongs);
       renderMySongs();
+      if (offlineAppEnabled) void updateOfflineStorageUsage();
       mySongForm.reset();
       mySongReferenceList.replaceChildren();
       mySongInstrumentList.replaceChildren();
@@ -2994,6 +3656,7 @@
       db.close();
       mySongs = mySongs.filter((song) => song.id !== songId);
       renderMySongs();
+      if (offlineAppEnabled) void updateOfflineStorageUsage();
       mySongsStatus.textContent = 'Lagu berhasil dihapus dari perangkat ini.';
     } catch (error) {
       mySongsStatus.textContent = 'Lagu tidak dapat dihapus dari penyimpanan lokal.';
@@ -3047,6 +3710,10 @@
   const sidebarOrderItems = document.getElementById('sidebar-settings-list');
   const sidebarSettingsDialog = document.getElementById('sidebar-settings-dialog');
   const sidebarSettingsForm = document.getElementById('sidebar-settings-form');
+  const offlineSettingsDialog = document.getElementById('offline-settings-dialog');
+  const offlineSettingsForm = document.getElementById('offline-settings-form');
+  const offlineSettingsConsent = document.getElementById('offline-settings-consent');
+  const saveOfflineSettingsButton = document.getElementById('save-offline-settings');
   const defaultSidebarOrder = ['collection', 'schedule', 'my-songs', 'settings'];
   function normalizeSidebarOrder(order) {
     const validViews = new Set(defaultSidebarOrder);
@@ -3075,6 +3742,7 @@
   let sidebarDragGhost = null;
   let sidebarPointerDragId = null;
   let sidebarDragPointerOffset = { x: 0, y: 0 };
+  let sidebarBackdropHideTimer = 0;
   function moveSidebarSettingsPlaceholder(clientY) {
     if (!sidebarDragPlaceholder) return;
     const siblings = [...sidebarOrderItems.children].filter((item) => item !== sidebarDragPlaceholder);
@@ -3128,6 +3796,46 @@
   });
   document.getElementById('close-sidebar-settings').addEventListener('click', () => sidebarSettingsDialog.close());
   document.getElementById('cancel-sidebar-settings').addEventListener('click', () => sidebarSettingsDialog.close());
+  document.getElementById('open-offline-settings').addEventListener('click', () => {
+    offlineSettingsConsent.checked = offlineAppEnabled;
+    if (offlineSettingsWarning) offlineSettingsWarning.hidden = true;
+    if (offlineSettingsStatus) offlineSettingsStatus.textContent = '';
+    saveOfflineSettingsButton.disabled = !offlineAppEnabled;
+    offlineSettingsDialog.showModal();
+  });
+  document.getElementById('close-offline-settings').addEventListener('click', () => offlineSettingsDialog.close());
+  offlineSettingsConsent.addEventListener('change', () => {
+    const disabling = offlineAppEnabled && !offlineSettingsConsent.checked;
+    saveOfflineSettingsButton.disabled = !offlineSettingsConsent.checked && !offlineAppEnabled;
+    if (offlineSettingsWarning) offlineSettingsWarning.hidden = !disabling;
+  });
+  offlineSettingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (offlineImageDownloadInFlight) return;
+    saveOfflineSettingsButton.disabled = true;
+    if (!offlineSettingsConsent.checked) {
+      if (!offlineAppEnabled) return;
+      if (offlineSettingsStatus) offlineSettingsStatus.textContent = 'Menghapus gambar offline…';
+      try {
+        await clearOfflineImageCache();
+        offlineAppEnabled = false;
+        saveOfflineAppEnabled(false);
+        renderOfflineAppStatus();
+        offlineSettingsDialog.close();
+      } catch (error) {
+        if (offlineSettingsStatus) offlineSettingsStatus.textContent = error.message || 'Gambar offline gagal dihapus.';
+        saveOfflineSettingsButton.disabled = false;
+      }
+      return;
+    }
+    offlineAppEnabled = true;
+    saveOfflineAppEnabled(true);
+    renderOfflineAppStatus();
+    if (offlineSettingsStatus) offlineSettingsStatus.textContent = 'Unduhan gambar berjalan di latar belakang.';
+    offlineSettingsDialog.close();
+    void downloadAllOfflineImages().catch((error) => console.warn('Unduhan gambar offline gagal:', error));
+  });
+  renderOfflineAppStatus();
   sidebarOrderItems.addEventListener('pointerdown', (event) => {
     if (!event.target.closest('.sidebar-settings-grip')) return;
     const item = event.target.closest('.sidebar-settings-item');
@@ -3156,26 +3864,66 @@
     sidebarSettingsDialog.close();
   });
   let hasOpenedCollectionView = false;
-  function closeSidebar() {
-    appSidebar.classList.remove('is-open');
-    sidebarToggle.setAttribute('aria-expanded', 'false');
-    sidebarBackdrop.hidden = true;
+  let navigationRenderFrame = 0;
+  let navigationRenderIdle = 0;
+  let navigationRenderTimer = 0;
+  function cancelNavigationRender() {
+    window.cancelAnimationFrame(navigationRenderFrame);
+    if (navigationRenderIdle && typeof window.cancelIdleCallback === 'function') window.cancelIdleCallback(navigationRenderIdle);
+    window.clearTimeout(navigationRenderTimer);
+    navigationRenderFrame = 0;
+    navigationRenderIdle = 0;
+    navigationRenderTimer = 0;
   }
-  function activateAppView(view) {
+  function scheduleNavigationRender(view, render) {
+    cancelNavigationRender();
+    // Give the panel switch one paint before rendering. The collection render
+    // itself is chunked, so an extra timer/frame only adds visible navigation
+    // latency on mobile browsers.
+    navigationRenderFrame = window.requestAnimationFrame(() => {
+      navigationRenderFrame = 0;
+      navigationRenderIdle = 0;
+      navigationRenderTimer = 0;
+      if (isSidebarViewActive(view)) render();
+    });
+  }
+  function closeSidebar() {
+    window.clearTimeout(sidebarBackdropHideTimer);
+    appSidebar.classList.remove('is-open');
+    sidebarToggle.setAttribute('aria-label', 'Buka menu');
+    sidebarToggle.setAttribute('aria-expanded', 'false');
+    sidebarBackdrop.classList.remove('is-visible');
+    // Keep the backdrop in the stacking context until the short fade-out is
+    // complete. Removing [hidden] in the same frame as the sidebar transform
+    // causes a visible flash in Android WebView.
+    sidebarBackdropHideTimer = window.setTimeout(() => {
+      if (!appSidebar.classList.contains('is-open')) {
+        sidebarBackdrop.hidden = true;
+        sidebarToggle.classList.remove('is-hidden');
+        if (isSidebarViewActive('collection') && collectionRenderPending) {
+          scheduleNavigationRender('collection', () => renderList({ renderLocalSongs: false }));
+        }
+      }
+    }, 160);
+  }
+  function activateAppView(view, options = {}) {
+    cancelNavigationRender();
+    if (view !== 'collection') cancelCollectionRender({ preserveView: true });
+    if (view !== 'my-songs') mySongsRenderGeneration += 1;
     const panelView = ['my-songs', 'collection', 'settings'].includes(view) ? 'songs' : view;
     appViewPanels.forEach((panel) => {
       const activePanel = panel.dataset.appViewPanel === panelView;
       panel.classList.toggle('is-active', activePanel);
       panel.removeAttribute('hidden');
     });
-    if (view === 'schedule') renderSchedules();
+    if (view === 'schedule') {
+      scheduleNavigationRender('schedule', renderSchedules);
+    }
     appViewButtons.forEach((button) => {
       const active = button.dataset.appView === view;
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-current', active ? 'page' : 'false');
     });
-    updateHeaderActions(view);
-    updateHeaderIdentity(view);
     const appShell = document.querySelector('.app-shell');
     if (appShell) {
       appShell.classList.toggle('schedule-view-active', view === 'schedule');
@@ -3191,17 +3939,68 @@
     if (view === 'my-songs') activateLibraryTab(document.getElementById('my-songs-tab'));
     if (view === 'collection') activateLibraryTab(document.getElementById('all-songs-tab'));
     if (view === 'settings') activateLibraryTab(instrumentProfileButton);
+    // Switch the visible panel first. Render only the panel the user just
+    // opened, on the next frame, so a large hidden list cannot block the
+    // sidebar transition or require a second tap.
+    if (view === 'my-songs' && mySongsRenderPending) {
+      scheduleNavigationRender('my-songs', renderMySongs);
+    }
+    if (view === 'collection' && collectionRenderPending) {
+      scheduleNavigationRender('collection', () => renderList({ renderLocalSongs: false }));
+    } else if (view === 'collection' && collectionScheduleControlsPending) {
+      // The list DOM is still valid; update only the per-card schedule
+      // actions after the panel is visible. This keeps navigation work tiny.
+      scheduleNavigationRender('collection', () => refreshScheduleTargetControls());
+    }
     if (view === 'collection' && !hasOpenedCollectionView) {
       hasOpenedCollectionView = true;
-      if (!songs.length) loadSongs(true, false);
+      if (!songs.length && !options.skipInitialLoad) loadSongs(true, false);
     }
     closeSidebar();
+    window.requestAnimationFrame(() => {
+      if (document.querySelector('.sidebar-nav-item.is-active')?.dataset.appView !== view) return;
+      updateHeaderActions(view);
+      updateHeaderIdentity(view);
+    });
   }
-  sidebarToggle.addEventListener('click', () => {
+  let sidebarPointerToggleHandled = false;
+  function toggleSidebar() {
     const open = !appSidebar.classList.contains('is-open');
-    appSidebar.classList.toggle('is-open', open);
-    sidebarToggle.setAttribute('aria-expanded', String(open));
-    sidebarBackdrop.hidden = !open;
+    window.clearTimeout(sidebarBackdropHideTimer);
+    if (open) {
+      if (document.activeElement === search) search.blur();
+      // Stop any queued collection chunks before opening the drawer. The
+      // current list remains visible underneath, but the tap gets the main
+      // thread immediately.
+      cancelCollectionRender({ preserveView: true });
+      sidebarBackdrop.hidden = false;
+      // Let the backdrop start from opacity 0 before enabling its transition.
+      window.requestAnimationFrame(() => {
+        if (appSidebar.classList.contains('is-open')) sidebarBackdrop.classList.add('is-visible');
+      });
+      appSidebar.classList.add('is-open');
+      // The toggle belongs to the page header. Hide it while the sidebar is
+      // open so it cannot remain visible above the drawer on mobile.
+      sidebarToggle.classList.add('is-hidden');
+      sidebarToggle.setAttribute('aria-label', 'Tutup menu');
+      sidebarToggle.setAttribute('aria-expanded', 'true');
+    } else {
+      closeSidebar();
+    }
+  }
+  // On touch browsers, pointerdown runs before the delayed synthetic click.
+  // Open the drawer at that earliest point so a pending search update cannot
+  // make the user wait for the click event.
+  sidebarToggle.addEventListener('pointerdown', (event) => {
+    if (!['touch', 'pen'].includes(event.pointerType)) return;
+    event.preventDefault();
+    sidebarPointerToggleHandled = true;
+    toggleSidebar();
+    window.setTimeout(() => { sidebarPointerToggleHandled = false; }, 700);
+  }, { passive: false });
+  sidebarToggle.addEventListener('click', () => {
+    if (sidebarPointerToggleHandled) return;
+    toggleSidebar();
   });
   sidebarBackdrop.addEventListener('click', closeSidebar);
   appViewButtons.forEach((button) => button.addEventListener('click', () => activateAppView(button.dataset.appView)));
@@ -3315,7 +4114,8 @@
   activateAppView('schedule');
   updateHeaderIdentity('schedule');
   loadMySongInstrumentOptions();
-  loadMySongs();
+  // Do not deserialize the local song database while the first screen is being wired up.
+  window.setTimeout(() => loadMySongs(), 300);
 
   function stripHtml(value) {
     const parsed = new DOMParser().parseFromString(String(value || ''), 'text/html');
@@ -3382,8 +4182,7 @@
     const displayNumber = displaySongNumber(song.number);
     document.getElementById('dialog-title').textContent = `${displayNumber ? `${displayNumber}. ` : ''}${song.title}`;
     if (!document.getElementById('reference-dialog').hidden) document.getElementById('reference-title').textContent = document.getElementById('dialog-title').textContent;
-    renderPreviewMetadata();
-    renderSongContent();
+    const renderGeneration = ++previewRenderGeneration;
     const readerPosition = document.getElementById('reader-position');
     const hasWorshipGrouping = queue.some((item) => typeof item.preWorship === 'boolean');
     if (hasWorshipGrouping) {
@@ -3401,10 +4200,15 @@
     document.getElementById('next-song').disabled = currentSongIndex < 0 || currentSongIndex >= queue.length - 1;
     if (showPreview && !dialog.open) dialog.showModal();
     if (dialog.open) document.body.classList.add('song-reader-open');
-    scheduleSongFit();
     preview.scrollTop = 0;
     preview.scrollLeft = 0;
     if (dialog.open) document.getElementById('close-dialog').focus();
+    if (showPreview || dialog.open) window.requestAnimationFrame(() => {
+      if (renderGeneration !== previewRenderGeneration) return;
+      renderPreviewMetadata();
+      renderSongContent();
+      scheduleSongFit();
+    });
   }
 
   function openSongFromList(song, queue = songs, queueIndex, fromCollection = false) {
@@ -3572,8 +4376,8 @@
     });
     scorePages.replaceChildren();
     files.forEach((file, index) => {
-      const urls = scoreImageCandidates(file);
-      if (!urls.length) return;
+      const onlineUrls = scoreImageOnlineCandidates(file);
+      if (!scoreImageLocalUrl(file) && !scoreImageId(file) && !onlineUrls.length) return;
       const figure = document.createElement('figure');
       figure.className = 'score-page';
       const image = document.createElement('img');
@@ -3597,18 +4401,18 @@
       });
       const caption = document.createElement('figcaption');
       caption.textContent = file && typeof file === 'object' && file.name ? file.name : `${instrument} · ${index + 1}`;
-      let attempt = 0;
+      let attempt = -1;
       image.addEventListener('error', () => {
         attempt += 1;
-        if (attempt < urls.length) {
-          image.src = urls[attempt];
+        if (attempt < onlineUrls.length) {
+          image.src = onlineUrls[attempt];
           return;
         }
         image.remove();
         caption.textContent = 'Tidak dapat menampilkan gambar di halaman ini. ';
         const link = document.createElement('a');
         const fileId = scoreImageId(file);
-        link.href = fileId ? `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view` : urls[0];
+        link.href = fileId ? `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view` : (onlineUrls[0] || '#');
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = 'Buka partitur di Google Drive';
@@ -3616,7 +4420,13 @@
       });
       figure.append(image, caption);
       scorePages.append(figure);
-      image.src = urls[0];
+      const imageId = scoreImageId(file);
+      image.dataset.offlineImageId = imageId;
+      void resolveScoreImageSource(file).then((resolved) => {
+        if (!resolved || !image.isConnected || image.dataset.offlineImageId !== imageId) return;
+        image.src = resolved.url;
+        if (resolved.candidates) image.dataset.onlineCandidates = JSON.stringify(resolved.candidates);
+      });
     });
     scorePages.scrollLeft = 0;
     scorePages.hidden = false;
@@ -3639,9 +4449,15 @@
     activeScoreInstrument = instrument;
     activeScoreFiles = files;
     activeScoreIndex = index;
+    // Open the viewer before resolving an IndexedDB/Drive image. Resolving a
+    // cached blob is asynchronous, and showing the dialog first makes the
+    // tap feel immediate while the image source is selected in the background.
+    if (!scoreImageDialog.open) {
+      scoreImageDialog.showModal();
+      syncNativeSystemBars(true);
+    }
     const hasOtherInstruments = renderScoreImageInstrumentButtons();
     renderFullScoreImage();
-    if (!scoreImageDialog.open) scoreImageDialog.showModal();
     if (showControlsInitially) showScoreImageControls();
     else {
       setScoreImageControlsHidden(false);
@@ -3724,23 +4540,13 @@
     scoreKeyWatermark.hidden = !enabled || controlsHidden;
     const renderSignature = JSON.stringify([
       scoreImageMode, enabled, watermark, genre, note,
-      settings.showKey, settings.showGenre, settings.showNote,
-      settings.fontSize, settings.genreFontSize, settings.noteFontSize, settings.transparency,
-      settings.color, settings.genreColor, settings.noteColor,
-      settings.outlineWidth, settings.outlinePosition, settings.outlineColor,
-      settings.shadowX, settings.shadowY, settings.shadowBlur, settings.shadowColor
+      settings
     ]);
     if (scoreKeyWatermark.dataset.renderSignature === renderSignature) return;
     scoreKeyWatermark.dataset.renderSignature = renderSignature;
     scoreKeyWatermarkValue.style.setProperty('font-size', `clamp(42px, ${settings.fontSize}vw, 34vw)`, 'important');
     scoreKeyWatermarkValue.style.setProperty('font-weight', '900', 'important');
-    const textOpacity = Math.max(0, Math.min(1, (100 - settings.transparency) / 100));
-    scoreKeyWatermarkValue.style.setProperty('color', settings.color, 'important');
-    scoreKeyWatermarkValue.style.setProperty('opacity', String(textOpacity), 'important');
-    scoreKeyWatermarkValue.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
-    scoreKeyWatermarkValue.style.setProperty('-webkit-text-stroke', `${settings.outlineWidth}px ${settings.outlineColor}`, 'important');
-    scoreKeyWatermarkValue.style.setProperty('paint-order', settings.outlinePosition === 'outer' ? 'stroke fill' : 'fill stroke', 'important');
-    scoreKeyWatermarkValue.style.setProperty('text-shadow', `${settings.shadowX}px ${settings.shadowY}px ${settings.shadowBlur}px ${settings.shadowColor}`, 'important');
+    scoreKeyWatermarkValue.style.setProperty('text-align', settings.textAlign, 'important');
     const ensureWatermarkLine = (className) => {
       let line = scoreKeyWatermarkValue.querySelector(`.${className}`);
       if (!line) {
@@ -3753,56 +4559,85 @@
     const keyLine = ensureWatermarkLine('score-key-watermark-key');
     const genreLine = ensureWatermarkLine('score-key-watermark-genre');
     const noteLine = ensureWatermarkLine('score-key-watermark-note');
+    const styleWatermarkLine = (line, prefix, color) => {
+      line.style.color = color;
+      line.style.setProperty('-webkit-text-fill-color', color, 'important');
+      line.style.setProperty('opacity', String(Math.max(0, Math.min(1, (100 - settings[`${prefix}Transparency`]) / 100))), 'important');
+      line.style.setProperty('-webkit-text-stroke', `${settings[`${prefix}OutlineWidth`]}px ${settings[`${prefix}OutlineColor`]}`, 'important');
+      line.style.setProperty('paint-order', settings[`${prefix}OutlinePosition`] === 'outer' ? 'stroke fill' : 'fill stroke', 'important');
+      line.style.setProperty('text-shadow', `${settings[`${prefix}ShadowX`]}px ${settings[`${prefix}ShadowY`]}px ${settings[`${prefix}ShadowBlur`]}px ${settings[`${prefix}ShadowColor`]}`, 'important');
+    };
     keyLine.textContent = watermark;
-    keyLine.style.color = settings.color;
-    keyLine.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
+    styleWatermarkLine(keyLine, 'key', settings.color);
     keyLine.hidden = !settings.showKey || !watermark;
     genreLine.textContent = genre ? `(${genre})` : '';
-    genreLine.style.color = settings.genreColor;
-    genreLine.style.setProperty('-webkit-text-fill-color', settings.genreColor, 'important');
-    noteLine.textContent = note ? `-> ${note}` : '';
-    noteLine.style.color = settings.noteColor;
-    noteLine.style.setProperty('-webkit-text-fill-color', settings.noteColor, 'important');
+    styleWatermarkLine(genreLine, 'genre', settings.genreColor);
+    noteLine.textContent = note;
+    styleWatermarkLine(noteLine, 'note', settings.noteColor);
     genreLine.style.fontSize = `clamp(18px, ${settings.genreFontSize}vw, 20vw)`;
     noteLine.style.fontSize = `clamp(16px, ${settings.noteFontSize}vw, 18vw)`;
     genreLine.hidden = !settings.showGenre || !genre;
     noteLine.hidden = !settings.showNote || !note;
+    genreLine.style.display = settings.showGenre && genre ? 'block' : 'none';
+    noteLine.style.display = settings.showNote && note ? 'block' : 'none';
   }
 
-  const keyWatermarkControlIds = ['font-size', 'genre-font-size', 'note-font-size', 'transparency', 'color', 'genre-color', 'note-color', 'outline-width', 'outline-color', 'shadow-width', 'shadow-color', 'shadow-x', 'shadow-y', 'shadow-blur'];
+  const keyWatermarkControlIds = ['font-size', 'genre-font-size', 'note-font-size', 'key-transparency', 'genre-transparency', 'note-transparency', 'color', 'genre-color', 'note-color', 'key-outline-width', 'genre-outline-width', 'note-outline-width', 'key-outline-color', 'genre-outline-color', 'note-outline-color', 'key-shadow-width', 'genre-shadow-width', 'note-shadow-width', 'key-shadow-color', 'genre-shadow-color', 'note-shadow-color', 'key-shadow-x', 'genre-shadow-x', 'note-shadow-x', 'key-shadow-y', 'genre-shadow-y', 'note-shadow-y', 'key-shadow-blur', 'genre-shadow-blur', 'note-shadow-blur'];
+  setupWatermarkSections();
   function keyWatermarkSettingsFromForm() {
-    const settings = {};
-    keyWatermarkControlIds.forEach((name) => { settings[name.replace(/-/g, '')] = Number(document.getElementById(`key-watermark-${name}`).value); });
+    const value = (name) => document.getElementById(`key-watermark-${name}`).value;
     return normalizeKeyWatermarkSettings({
-      showKey: document.getElementById('key-watermark-show-key').checked, showGenre: document.getElementById('key-watermark-show-genre').checked, showNote: document.getElementById('key-watermark-show-note').checked, outlinePosition: document.getElementById('key-watermark-outline-position').value, fontSize: settings.fontsize, genreFontSize: settings.genrefontsize, noteFontSize: settings.notefontsize, transparency: settings.transparency, color: document.getElementById('key-watermark-color').value, genreColor: document.getElementById('key-watermark-genre-color').value, noteColor: document.getElementById('key-watermark-note-color').value, outlineWidth: settings.outlinewidth, outlineColor: document.getElementById('key-watermark-outline-color').value,
-      shadowWidth: settings.shadowwidth, shadowColor: document.getElementById('key-watermark-shadow-color').value, shadowX: settings.shadowx, shadowY: settings.shadowy, shadowBlur: settings.shadowblur
+      showKey: document.getElementById('key-watermark-show-key').checked, showGenre: document.getElementById('key-watermark-show-genre').checked, showNote: document.getElementById('key-watermark-show-note').checked, textAlign: document.querySelector('input[name="key-watermark-text-align"]:checked')?.value || 'center', fontSize: Number(value('font-size')), genreFontSize: Number(value('genre-font-size')), noteFontSize: Number(value('note-font-size')), color: value('color'), genreColor: value('genre-color'), noteColor: value('note-color'),
+      keyTransparency: Number(value('key-transparency')), genreTransparency: Number(value('genre-transparency')), noteTransparency: Number(value('note-transparency')), keyOutlineWidth: Number(value('key-outline-width')), genreOutlineWidth: Number(value('genre-outline-width')), noteOutlineWidth: Number(value('note-outline-width')), keyOutlineColor: value('key-outline-color'), genreOutlineColor: value('genre-outline-color'), noteOutlineColor: value('note-outline-color'), keyOutlinePosition: value('key-outline-position'), genreOutlinePosition: value('genre-outline-position'), noteOutlinePosition: value('note-outline-position'), keyShadowWidth: Number(value('key-shadow-width')), genreShadowWidth: Number(value('genre-shadow-width')), noteShadowWidth: Number(value('note-shadow-width')), keyShadowColor: value('key-shadow-color'), genreShadowColor: value('genre-shadow-color'), noteShadowColor: value('note-shadow-color'), keyShadowX: Number(value('key-shadow-x')), genreShadowX: Number(value('genre-shadow-x')), noteShadowX: Number(value('note-shadow-x')), keyShadowY: Number(value('key-shadow-y')), genreShadowY: Number(value('genre-shadow-y')), noteShadowY: Number(value('note-shadow-y')), keyShadowBlur: Number(value('key-shadow-blur')), genreShadowBlur: Number(value('genre-shadow-blur')), noteShadowBlur: Number(value('note-shadow-blur'))
     });
   }
 
   function updateKeyWatermarkPreview() {
     const settings = keyWatermarkSettingsFromForm();
     const preview = keyWatermarkPreview;
-    preview.style.setProperty('font-size', `${Math.max(30, Math.min(110, settings.fontSize * 4.5))}px`, 'important');
-    preview.querySelector('.key-watermark-preview-key').hidden = !settings.showKey;
-    preview.querySelector('.key-watermark-preview-genre').hidden = !settings.showGenre;
-    preview.querySelector('.key-watermark-preview-note').hidden = !settings.showNote;
-    preview.querySelector('.key-watermark-preview-genre').style.fontSize = `${Math.max(12, Math.min(36, settings.genreFontSize * 4.5))}px`;
-    preview.querySelector('.key-watermark-preview-note').style.fontSize = `${Math.max(12, Math.min(36, settings.noteFontSize * 4.5))}px`;
-    preview.querySelector('.key-watermark-preview-key').style.color = settings.color;
-    preview.querySelector('.key-watermark-preview-genre').style.color = settings.genreColor;
-    preview.querySelector('.key-watermark-preview-note').style.color = settings.noteColor;
-    preview.querySelector('.key-watermark-preview-key').style.setProperty('-webkit-text-fill-color', settings.color, 'important');
-    preview.querySelector('.key-watermark-preview-genre').style.setProperty('-webkit-text-fill-color', settings.genreColor, 'important');
-    preview.querySelector('.key-watermark-preview-note').style.setProperty('-webkit-text-fill-color', settings.noteColor, 'important');
+    const previewKey = preview.querySelector('.key-watermark-preview-key');
+    const previewGenre = preview.querySelector('.key-watermark-preview-genre');
+    const previewNote = preview.querySelector('.key-watermark-preview-note');
+    const showKey = document.getElementById('key-watermark-show-key').checked;
+    const showGenre = document.getElementById('key-watermark-show-genre').checked;
+    const showNote = document.getElementById('key-watermark-show-note').checked;
+    // Keep all three preview lines present while toggling only their visibility.
+    previewKey.textContent = 'A=1';
+    previewGenre.textContent = '(Slow Beat)';
+    previewNote.textContent = 'Intro Biola';
+    preview.style.setProperty('text-align', settings.textAlign, 'important');
+    // Match the full-screen score watermark sizing exactly; do not cap the
+    // preview value so large settings remain visibly large here as well.
+    preview.style.setProperty('font-size', `clamp(42px, ${settings.fontSize}vw, 34vw)`, 'important');
+    previewKey.hidden = !showKey;
+    previewGenre.hidden = !showGenre;
+    previewNote.hidden = !showNote;
+    previewKey.style.display = showKey ? 'block' : 'none';
+    previewGenre.style.display = showGenre ? 'block' : 'none';
+    previewNote.style.display = showNote ? 'block' : 'none';
+    previewGenre.style.fontSize = `clamp(18px, ${settings.genreFontSize}vw, 20vw)`;
+    previewNote.style.fontSize = `clamp(16px, ${settings.noteFontSize}vw, 18vw)`;
+    previewKey.style.color = settings.color;
+    previewGenre.style.color = settings.genreColor;
+    previewNote.style.color = settings.noteColor;
+    previewKey.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
+    previewGenre.style.setProperty('-webkit-text-fill-color', settings.genreColor, 'important');
+    previewNote.style.setProperty('-webkit-text-fill-color', settings.noteColor, 'important');
     preview.style.setProperty('color', settings.color, 'important');
-    preview.style.setProperty('opacity', String(Math.max(0, Math.min(1, (100 - settings.transparency) / 100))), 'important');
-    preview.style.setProperty('-webkit-text-fill-color', settings.color, 'important');
-    preview.style.setProperty('-webkit-text-stroke', `${settings.outlineWidth}px ${settings.outlineColor}`, 'important');
-    preview.style.setProperty('paint-order', settings.outlinePosition === 'outer' ? 'stroke fill' : 'fill stroke', 'important');
-    preview.style.setProperty('text-shadow', `${settings.shadowX}px ${settings.shadowY}px ${settings.shadowBlur}px ${settings.shadowColor}`, 'important');
+    const stylePreviewLine = (line, prefix, color) => {
+      line.style.color = color;
+      line.style.setProperty('text-align', settings.textAlign, 'important');
+      line.style.setProperty('-webkit-text-fill-color', color, 'important');
+      line.style.setProperty('opacity', String(Math.max(0, Math.min(1, (100 - settings[`${prefix}Transparency`]) / 100))), 'important');
+      line.style.setProperty('-webkit-text-stroke', `${settings[`${prefix}OutlineWidth`]}px ${settings[`${prefix}OutlineColor`]}`, 'important');
+      line.style.setProperty('paint-order', settings[`${prefix}OutlinePosition`] === 'outer' ? 'stroke fill' : 'fill stroke', 'important');
+      line.style.setProperty('text-shadow', `${settings[`${prefix}ShadowX`]}px ${settings[`${prefix}ShadowY`]}px ${settings[`${prefix}ShadowBlur`]}px ${settings[`${prefix}ShadowColor`]}`, 'important');
+    };
+    stylePreviewLine(previewKey, 'key', settings.color);
+    stylePreviewLine(previewGenre, 'genre', settings.genreColor);
+    stylePreviewLine(previewNote, 'note', settings.noteColor);
     const labels = {
-      fontSize: `${settings.fontSize}%`, genreFontSize: `${settings.genreFontSize}%`, noteFontSize: `${settings.noteFontSize}%`, transparency: `${settings.transparency}%`, color: settings.color.toUpperCase(), genreColor: settings.genreColor.toUpperCase(), noteColor: settings.noteColor.toUpperCase(), outlineWidth: `${settings.outlineWidth} px`, outlineColor: settings.outlineColor.toUpperCase(),
-      shadowWidth: `${settings.shadowWidth} px`, shadowColor: settings.shadowColor.toUpperCase(), shadowX: `${settings.shadowX} px`, shadowY: `${settings.shadowY} px`, shadowBlur: `${settings.shadowBlur} px`
+      fontSize: `${settings.fontSize}%`, genreFontSize: `${settings.genreFontSize}%`, noteFontSize: `${settings.noteFontSize}%`, keyTransparency: `${settings.keyTransparency}%`, genreTransparency: `${settings.genreTransparency}%`, noteTransparency: `${settings.noteTransparency}%`, color: settings.color.toUpperCase(), genreColor: settings.genreColor.toUpperCase(), noteColor: settings.noteColor.toUpperCase(), keyOutlineWidth: `${settings.keyOutlineWidth} px`, genreOutlineWidth: `${settings.genreOutlineWidth} px`, noteOutlineWidth: `${settings.noteOutlineWidth} px`, keyOutlineColor: settings.keyOutlineColor.toUpperCase(), genreOutlineColor: settings.genreOutlineColor.toUpperCase(), noteOutlineColor: settings.noteOutlineColor.toUpperCase(), keyShadowWidth: `${settings.keyShadowWidth} px`, genreShadowWidth: `${settings.genreShadowWidth} px`, noteShadowWidth: `${settings.noteShadowWidth} px`, keyShadowColor: settings.keyShadowColor.toUpperCase(), genreShadowColor: settings.genreShadowColor.toUpperCase(), noteShadowColor: settings.noteShadowColor.toUpperCase(), keyShadowX: `${settings.keyShadowX} px`, genreShadowX: `${settings.genreShadowX} px`, noteShadowX: `${settings.noteShadowX} px`, keyShadowY: `${settings.keyShadowY} px`, genreShadowY: `${settings.genreShadowY} px`, noteShadowY: `${settings.noteShadowY} px`, keyShadowBlur: `${settings.keyShadowBlur} px`, genreShadowBlur: `${settings.genreShadowBlur} px`, noteShadowBlur: `${settings.noteShadowBlur} px`
     };
     Object.entries(labels).forEach(([name, value]) => { document.getElementById(`key-watermark-${name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}-value`).textContent = value; });
   }
@@ -3812,11 +4647,76 @@
     document.getElementById('key-watermark-show-key').checked = settings.showKey;
     document.getElementById('key-watermark-show-genre').checked = settings.showGenre;
     document.getElementById('key-watermark-show-note').checked = settings.showNote;
-    document.getElementById('key-watermark-outline-position').value = settings.outlinePosition;
-    const values = { 'font-size': settings.fontSize, 'genre-font-size': settings.genreFontSize, 'note-font-size': settings.noteFontSize, transparency: settings.transparency, color: settings.color, 'genre-color': settings.genreColor, 'note-color': settings.noteColor, 'outline-width': settings.outlineWidth, 'outline-color': settings.outlineColor, 'shadow-width': settings.shadowWidth, 'shadow-color': settings.shadowColor, 'shadow-x': settings.shadowX, 'shadow-y': settings.shadowY, 'shadow-blur': settings.shadowBlur };
+    document.querySelectorAll('input[name="key-watermark-text-align"]').forEach((input) => { input.checked = input.value === settings.textAlign; });
+    document.getElementById('key-watermark-text-align-value').textContent = settings.textAlign[0].toUpperCase() + settings.textAlign.slice(1);
+    document.querySelectorAll('.key-watermark-status').forEach((status) => { const input = status.previousElementSibling; status.textContent = input.checked ? 'Aktif' : 'Tidak aktif'; });
+    const values = { 'font-size': settings.fontSize, 'genre-font-size': settings.genreFontSize, 'note-font-size': settings.noteFontSize, 'key-transparency': settings.keyTransparency, 'genre-transparency': settings.genreTransparency, 'note-transparency': settings.noteTransparency, color: settings.color, 'genre-color': settings.genreColor, 'note-color': settings.noteColor, 'key-outline-width': settings.keyOutlineWidth, 'genre-outline-width': settings.genreOutlineWidth, 'note-outline-width': settings.noteOutlineWidth, 'key-outline-color': settings.keyOutlineColor, 'genre-outline-color': settings.genreOutlineColor, 'note-outline-color': settings.noteOutlineColor, 'key-outline-position': settings.keyOutlinePosition, 'genre-outline-position': settings.genreOutlinePosition, 'note-outline-position': settings.noteOutlinePosition, 'key-shadow-width': settings.keyShadowWidth, 'genre-shadow-width': settings.genreShadowWidth, 'note-shadow-width': settings.noteShadowWidth, 'key-shadow-color': settings.keyShadowColor, 'genre-shadow-color': settings.genreShadowColor, 'note-shadow-color': settings.noteShadowColor, 'key-shadow-x': settings.keyShadowX, 'genre-shadow-x': settings.genreShadowX, 'note-shadow-x': settings.noteShadowX, 'key-shadow-y': settings.keyShadowY, 'genre-shadow-y': settings.genreShadowY, 'note-shadow-y': settings.noteShadowY, 'key-shadow-blur': settings.keyShadowBlur, 'genre-shadow-blur': settings.genreShadowBlur, 'note-shadow-blur': settings.noteShadowBlur };
     Object.entries(values).forEach(([name, value]) => { document.getElementById(`key-watermark-${name}`).value = String(value); });
+    document.querySelectorAll('.key-watermark-slider-toggle:not(.key-watermark-section-toggle):not(.key-watermark-align-toggle)').forEach((button) => {
+      button.setAttribute('aria-expanded', 'false');
+      button.classList.remove('is-expanded');
+      const indicator = button.querySelector('[aria-hidden="true"]');
+      if (indicator) indicator.textContent = '+';
+      const input = document.getElementById(button.getAttribute('aria-controls'));
+      if (input) input.hidden = true;
+    });
+    document.querySelectorAll('.key-watermark-section-toggle').forEach((button) => {
+      button.setAttribute('aria-expanded', 'false');
+      button.classList.remove('is-expanded');
+      const indicator = button.querySelector('[aria-hidden="true"]');
+      if (indicator) indicator.textContent = '+';
+      const content = document.getElementById(button.getAttribute('aria-controls'));
+      if (content) content.hidden = true;
+    });
+    const textAlignToggle = document.getElementById('key-watermark-text-align-toggle');
+    const textAlignOptions = document.getElementById('key-watermark-text-align-options');
+    textAlignToggle.setAttribute('aria-expanded', 'false');
+    textAlignToggle.classList.remove('is-expanded');
+    textAlignOptions.hidden = true;
     updateKeyWatermarkPreview();
     if (!keyWatermarkDialog.open) keyWatermarkDialog.showModal();
+  }
+
+  function setupWatermarkSections() {
+    document.querySelectorAll('.key-watermark-group').forEach((group, index) => {
+      const legend = group.querySelector('legend')?.textContent.trim() || `group-${index}`;
+      const prefix = legend === 'Nada Dasar' ? 'key' : legend === 'Jenis Musik' ? 'genre' : 'note';
+      ['outline', 'shadow'].forEach((section) => {
+        const controls = [...group.children].filter((element) => {
+          const id = element.querySelector?.('[id]')?.id || '';
+          return id.startsWith(`key-watermark-${prefix}-${section}-`);
+        });
+        if (!controls.length || group.querySelector(`[data-watermark-section-toggle="${prefix}-${section}"]`)) return;
+        const sectionId = `key-watermark-${prefix}-${section}-settings`;
+        const content = document.createElement('div');
+        content.id = sectionId;
+        content.className = 'key-watermark-section-content';
+        content.hidden = true;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'key-watermark-slider-toggle key-watermark-section-toggle';
+        button.dataset.section = `${prefix}-${section}`;
+        button.dataset.watermarkSectionToggle = `${prefix}-${section}`;
+        button.setAttribute('aria-expanded', 'false');
+        button.setAttribute('aria-controls', sectionId);
+        button.innerHTML = `<span>${section === 'outline' ? 'Outline' : 'Shadow'}</span><span aria-hidden="true">+</span>`;
+        const first = controls[0];
+        group.insertBefore(button, first);
+        group.insertBefore(content, first);
+        controls.forEach((element) => {
+          element.hidden = false;
+          element.dataset.watermarkSection = `${prefix}-${section}`;
+          content.append(element);
+        });
+        button.addEventListener('click', () => {
+          const expanded = button.getAttribute('aria-expanded') !== 'true';
+          button.setAttribute('aria-expanded', String(expanded));
+          button.classList.toggle('is-expanded', expanded);
+          button.querySelector('[aria-hidden="true"]').textContent = expanded ? '−' : '+';
+          content.hidden = !expanded;
+        });
+      });
+    });
   }
 
   function clampScoreImagePan(x, y, zoom = scoreImageZoom) {
@@ -3878,12 +4778,18 @@
 
   function renderFullScoreImage() {
     const file = activeScoreFiles[activeScoreIndex];
-    const urls = scoreImageCandidates(file);
-    if (!urls.length) return;
+    const onlineUrls = scoreImageOnlineCandidates(file);
+    if (!scoreImageLocalUrl(file) && !scoreImageId(file) && !onlineUrls.length) return;
+    setScoreImageSource(file);
     resetScoreImageZoom();
-    fullScoreImage.dataset.candidates = JSON.stringify(urls);
-    fullScoreImage.dataset.attempt = '0';
-    fullScoreImage.src = urls[0];
+    fullScoreImage.dataset.candidates = JSON.stringify(onlineUrls);
+    fullScoreImage.dataset.attempt = '-1';
+    void resolveScoreImageSource(file).then((resolved) => {
+      if (!resolved || !fullScoreImage.isConnected || activeScoreFiles[activeScoreIndex] !== file) return;
+      fullScoreImage.src = resolved.url;
+      setScoreImageSource(file, resolved.source);
+      if (resolved.candidates) fullScoreImage.dataset.candidates = JSON.stringify(resolved.candidates);
+    });
     const showingIntro = scoreImageMode === 'intro';
     updateScoreKeyWatermark();
     renderScoreImageReferenceButton();
@@ -4083,19 +4989,25 @@
   }
 
   function scoreImageId(file) {
-    if (file && typeof file === 'object' && file.id) return String(file.id);
+    if (file && typeof file === 'object' && (file.id || file.fileId)) return String(file.id || file.fileId);
     const url = typeof file === 'string' ? file : String((file && file.url) || '');
     return url.match(/[?&]id=([^&]+)/)?.[1] || url.match(/\/d\/([^/]+)/)?.[1] || '';
   }
 
   function scoreImageCandidates(file) {
+    const localUrl = scoreImageLocalUrl(file);
+    if (localUrl) return [localUrl];
+    const id = scoreImageId(file);
+    if (id) {
+      const offlineUrl = offlineImageObjectUrls.get(id);
+      if (offlineUrl) return [offlineUrl];
+    }
     if (file && typeof file === 'object' && file.localCacheKey) {
       const cachedUrl = scheduleImageObjectUrls.get(file.localCacheKey);
       if (cachedUrl) return [cachedUrl];
     }
     const source = typeof file === 'string' ? file : String((file && (file.url || file.dataUrl || file.data)) || '');
     if (/^data:image\//i.test(source)) return [source];
-    const id = scoreImageId(file);
     if (!id) return source ? [source] : [];
     const encodedId = encodeURIComponent(id);
     const candidates = [
@@ -4105,6 +5017,50 @@
       source
     ];
     return [...new Set(candidates.filter(Boolean))];
+  }
+  function scoreImageLocalUrl(file) {
+    if (file && typeof file === 'object' && file.localCacheKey) {
+      const cachedUrl = scheduleImageObjectUrls.get(String(file.localCacheKey));
+      if (cachedUrl) return cachedUrl;
+    }
+    const source = typeof file === 'string' ? file : String((file && (file.url || file.dataUrl || file.data)) || '');
+    return /^(?:data:image\/|blob:)/i.test(source) ? source : '';
+  }
+  function scoreImageOnlineCandidates(file) {
+    const source = typeof file === 'string' ? file : String((file && (file.url || file.driveUrl)) || '');
+    const id = scoreImageId(file);
+    if (!id) return source && !/^(?:data:image\/|blob:)/i.test(source) ? [source] : [];
+    const encodedId = encodeURIComponent(id);
+    return [...new Set([
+      `https://drive.google.com/thumbnail?id=${encodedId}&sz=w2000`,
+      `https://lh3.googleusercontent.com/d/${encodedId}=w2000`,
+      `https://drive.google.com/uc?export=view&id=${encodedId}`,
+      source
+    ].filter(Boolean))];
+  }
+  async function resolveScoreImageSource(file) {
+    const localUrl = scoreImageLocalUrl(file);
+    if (localUrl) return { url: localUrl, source: 'Local' };
+    const id = scoreImageId(file);
+    if (id) {
+      const offlineUrl = await ensureOfflineImageObjectUrl(id);
+      if (offlineUrl) return { url: offlineUrl, source: 'Offline' };
+    }
+    const onlineUrls = scoreImageOnlineCandidates(file);
+    return onlineUrls.length ? { url: onlineUrls[0], source: 'Online', candidates: onlineUrls } : null;
+  }
+  function scoreImageSourceType(file) {
+    const localUrl = scoreImageLocalUrl(file);
+    if (localUrl) return 'Local';
+    const id = scoreImageId(file);
+    if (id && (offlineImageObjectUrls.has(id) || offlineImageKeys.has(id))) return 'Offline';
+    const source = typeof file === 'string' ? file : String((file && (file.url || file.dataUrl || file.data)) || '');
+    return id || /^https?:\/\//i.test(source) ? 'Online' : 'Local';
+  }
+  function setScoreImageSource(file, source = scoreImageSourceType(file)) {
+    if (!scoreImageSource) return;
+    scoreImageSource.textContent = source;
+    scoreImageSource.dataset.source = source.toLowerCase();
   }
 
   function populateTransposeKeys() {
@@ -4993,7 +5949,8 @@
     const returnTarget = scoreImageReturnTarget;
     scoreImageDialog.close();
     if (returnTarget === 'schedule' && viewedScheduleId) {
-      renderScheduleView(viewedScheduleId);
+      const scheduleId = viewedScheduleId;
+      window.requestAnimationFrame(() => renderScheduleView(scheduleId));
       if (!scheduleViewDialog.open) {
         scheduleViewDialog.showModal();
         document.body.classList.add('schedule-view-open');
@@ -5002,6 +5959,7 @@
   });
   scoreImageDialog.addEventListener('cancel', (event) => event.preventDefault());
   scoreImageDialog.addEventListener('close', () => {
+    syncNativeSystemBars(false);
     const returnToLyrics = scoreViewerFromList && currentPreviewSong;
     const lyricSong = currentPreviewSong;
     const lyricQueue = currentPreviewSongs;
@@ -5013,6 +5971,7 @@
     scoreImageDialog.classList.remove('instrument-controls-hidden');
     scoreImageInstruments.hidden = true;
     scoreImageReferenceButton.hidden = true;
+    setScoreImageSource(null, 'Online');
     scoreKeyWatermark.hidden = true;
     scoreKeyWatermarkValue.textContent = '';
     delete scoreKeyWatermark.dataset.renderSignature;
@@ -5030,8 +5989,6 @@
     scoreNextGeneralSongButton.hidden = true;
     chordModeSelect.value = 'numbers';
     transposeControls.hidden = true;
-    renderPreviewMetadata();
-    renderSongContent();
     if (returnToLyrics && lyricSong) {
       scoreViewerFromList = false;
       openSong(lyricSong, lyricQueue, lyricIndex, true, lyricFromCollection);
@@ -5274,8 +6231,35 @@
     activeWorshipKeyWatermarkEnabled = Boolean(schedule.keyWatermarkEnabled);
   });
   keyWatermarkControlIds.forEach((name) => document.getElementById(`key-watermark-${name}`).addEventListener('input', updateKeyWatermarkPreview));
-  ['key-watermark-show-key', 'key-watermark-show-genre', 'key-watermark-show-note'].forEach((id) => document.getElementById(id).addEventListener('change', updateKeyWatermarkPreview));
-  document.getElementById('key-watermark-outline-position').addEventListener('change', updateKeyWatermarkPreview);
+  document.querySelectorAll('.key-watermark-slider-toggle:not(.key-watermark-section-toggle):not(.key-watermark-align-toggle)').forEach((button) => {
+    button.addEventListener('click', () => {
+      const input = document.getElementById(button.getAttribute('aria-controls'));
+      if (!input) return;
+      const expanded = input.hidden;
+      input.hidden = !expanded;
+      button.setAttribute('aria-expanded', String(expanded));
+      button.classList.toggle('is-expanded', expanded);
+      if (expanded) input.focus({ preventScroll: true });
+    });
+  });
+  const textAlignToggle = document.getElementById('key-watermark-text-align-toggle');
+  const textAlignOptions = document.getElementById('key-watermark-text-align-options');
+  textAlignToggle.addEventListener('click', () => {
+    const expanded = textAlignOptions.hidden;
+    textAlignOptions.hidden = !expanded;
+    textAlignToggle.setAttribute('aria-expanded', String(expanded));
+    textAlignToggle.classList.toggle('is-expanded', expanded);
+  });
+  document.querySelectorAll('input[name="key-watermark-text-align"]').forEach((input) => input.addEventListener('change', () => {
+    document.getElementById('key-watermark-text-align-value').textContent = input.value[0].toUpperCase() + input.value.slice(1);
+    updateKeyWatermarkPreview();
+  }));
+  ['key-watermark-show-key', 'key-watermark-show-genre', 'key-watermark-show-note'].forEach((id) => document.getElementById(id).addEventListener('change', (event) => {
+    const status = event.target.closest('.key-watermark-check')?.querySelector('.key-watermark-status');
+    if (status) status.textContent = event.target.checked ? 'Aktif' : 'Tidak aktif';
+    updateKeyWatermarkPreview();
+  }));
+  ['key', 'genre', 'note'].forEach((prefix) => document.getElementById(`key-watermark-${prefix}-outline-position`).addEventListener('change', updateKeyWatermarkPreview));
   document.getElementById('close-key-watermark').addEventListener('click', () => keyWatermarkDialog.close());
   keyWatermarkForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -5428,8 +6412,36 @@
     if (!schedule || schedule.title === previousName) return;
     if (saveSchedules()) trackSuccessfulAction('schedule_rename_success', { previousName, scheduleName: schedule.title });
   });
+  scheduleList.addEventListener('change', (event) => {
+    const dateInput = event.target.closest('input[data-field="date"]');
+    if (!dateInput) return;
+    saveSchedules();
+    renderScheduleTargets();
+  });
+  // Cancel list work on the initial touch, before focus/keyboard handling.
+  // This prevents a pending card batch from delaying the input control.
+  searchBox?.addEventListener('pointerdown', (event) => {
+    cancelCollectionRender();
+    // Focus during pointerdown, before the delayed mobile click event.
+    if (event.target === search || event.target === clearSearchButton) {
+      search.focus({ preventScroll: true });
+    }
+  }, { capture: true, passive: true });
+  search.addEventListener('pointerdown', () => cancelCollectionRender(), { passive: true });
+  search.addEventListener('focus', () => cancelCollectionRender(), { passive: true });
+  clearSearchButton.addEventListener('pointerdown', () => cancelCollectionRender(), { passive: true });
   search.addEventListener('input', handleSearchInput);
-  clearSearchButton.addEventListener('click', () => { search.value = ''; handleSearchInput(); search.focus(); });
+  clearSearchButton.addEventListener('click', (event) => {
+    // The search field lives inside a label, so the browser may focus it as
+    // part of the same click. Focus first and give the mobile keyboard a
+    // chance to start its viewport transition before rebuilding the full
+    // collection list.
+    event.preventDefault();
+    cancelCollectionRender();
+    search.value = '';
+    search.focus({ preventScroll: true });
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => handleSearchInput()));
+  });
   scheduleList.addEventListener('pointerdown', handleScheduleDragStart);
   scheduleList.addEventListener('pointermove', handleScheduleDragMove);
   scheduleList.addEventListener('pointerup', finishScheduleDrag);
@@ -5444,6 +6456,11 @@
   document.getElementById('cancel-schedule-edit').addEventListener('click', () => { scheduleEditDialog.close(); editingEntry = null; });
   scheduleEditDialog.addEventListener('cancel', (event) => event.preventDefault());
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && appSidebar.classList.contains('is-open')) {
+      event.preventDefault();
+      closeSidebar();
+      return;
+    }
     if (event.key === '/' && !dialog.open && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
       event.preventDefault();
       search.focus();
@@ -5451,19 +6468,41 @@
     if (dialog.open && !scoreImageDialog.open && event.key === 'ArrowRight') openPreviewAt(currentSongIndex + 1);
     if (dialog.open && !scoreImageDialog.open && event.key === 'ArrowLeft') openPreviewAt(currentSongIndex - 1);
   });
+  const resumeOfflineDownload = () => {
+    if (!offlineAppEnabled || document.visibilityState !== 'visible') return;
+    const now = Date.now();
+    if (now - (resumeOfflineDownload.lastRun || 0) < 5000) return;
+    resumeOfflineDownload.lastRun = now;
+    void downloadAllOfflineImages();
+  };
+  document.addEventListener('visibilitychange', resumeOfflineDownload);
+  window.addEventListener('online', resumeOfflineDownload);
   filters.replaceChildren();
-  loadSchedules();
-  renderSchedules();
-  restoreActiveScheduleShare();
+  const initialAppView = currentSidebarOrder()[0] || 'collection';
+  activateAppView(initialAppView, { skipInitialLoad: true });
+  // Reveal the shell before parsing potentially large local caches so the sidebar
+  // remains interactive while data is restored in the next task.
+  document.documentElement.classList.remove('app-preload');
+  if (offlineAppEnabled) window.setTimeout(() => {
+    if (!offlineAppEnabled) return;
+    void loadOfflineImageCache();
+    void updateOfflineStorageUsage();
+  }, 900);
   if (!preferredUserName) openRequiredProfile();
-  const hasCache = loadCachedSongs();
-  if (!hasCache) {
-    count.textContent = '0';
-    setStatus('Belum ada data lokal. Tekan "Perbarui data" untuk memuat lagu dari database.');
-    setSyncStatus('Belum disinkronkan');
-  }
-  if (hasCache && isSongCacheOlderThanOneDay(cachedSongsUpdatedAt)) loadSongs(true, false);
-  activateAppView(currentSidebarOrder()[0] || 'collection');
+  window.setTimeout(() => {
+    loadSchedules();
+    renderSchedules();
+    restoreActiveScheduleShare();
+    const hasCache = loadCachedSongs();
+    if (!hasCache) {
+      count.textContent = '0';
+      setStatus('Belum ada data lokal. Tekan "Perbarui data" untuk memuat lagu dari database.');
+      setSyncStatus('Belum disinkronkan');
+      if (initialAppView === 'collection') loadSongs(true, false);
+    }
+    if (hasCache && isSongCacheOlderThanOneDay(cachedSongsUpdatedAt)) loadSongs(true, false);
+    activateAppView(initialAppView);
+  }, 50);
 })();
 
 
